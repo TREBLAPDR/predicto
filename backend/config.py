@@ -11,6 +11,6 @@ class Settings:
 
     @property
     def is_gemini_configured(self) -> bool:
-        return bool(self.GEMINI_API_KEY and self.GEMINI_API_KEY != "AIzaSyBmcXkGBJS-tSkmBeXDpTldFKZrmXh8IV4")
+        return bool(self.GEMINI_API_KEY and self.GEMINI_API_KEY != "your_gemini_api_key_here")
 
 settings = Settings()
