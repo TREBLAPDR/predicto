@@ -5,6 +5,8 @@ import re
 from PIL import Image
 from io import BytesIO
 import base64
+import asyncio
+from functools import partial
 
 from models.schemas import ParsedReceipt, ReceiptItem
 from config import settings
@@ -24,60 +26,65 @@ class GeminiService:
         ocr_blocks: Optional[list] = None
     ) -> ParsedReceipt:
         """
-        Parse receipt using Gemini Pro Vision API with retry logic
+        Parse receipt using Gemini Pro Vision API
+
+        Args:
+            image_base64: Base64 encoded receipt image (preferred)
+            ocr_text: Fallback OCR text if image not available
+            ocr_blocks: OCR blocks with bounding boxes (optional context)
+
+        Returns:
+            ParsedReceipt object with structured data
         """
 
         # Build the prompt
         prompt = self._build_prompt(ocr_text, ocr_blocks)
 
-        max_retries = 2
-        last_error = None
+        try:
+            # Run Gemini call in thread pool since it's synchronous
+            loop = asyncio.get_event_loop()
 
-        for attempt in range(max_retries):
-            try:
-                # If image is provided, use vision capabilities
-                if image_base64:
-                    image_bytes = base64.b64decode(image_base64)
-                    image = Image.open(BytesIO(image_bytes))
+            if image_base64:
+                image_bytes = base64.b64decode(image_base64)
+                image = Image.open(BytesIO(image_bytes))
 
-                    # Generate content with image + text prompt
-                    response = self.model.generate_content(
+                # Run synchronous Gemini call in executor
+                response = await loop.run_in_executor(
+                    None,
+                    partial(
+                        self.model.generate_content,
                         [prompt, image],
                         generation_config=genai.types.GenerationConfig(
                             temperature=settings.GEMINI_TEMPERATURE,
                             max_output_tokens=settings.GEMINI_MAX_TOKENS,
-                        ),
-                        request_options={"timeout": 60}  # 60 second timeout
+                        )
                     )
-                else:
-                    # Text-only mode (fallback)
-                    response = self.model.generate_content(
+                )
+            else:
+                # Text-only mode (fallback)
+                response = await loop.run_in_executor(
+                    None,
+                    partial(
+                        self.model.generate_content,
                         prompt,
                         generation_config=genai.types.GenerationConfig(
                             temperature=settings.GEMINI_TEMPERATURE,
                             max_output_tokens=settings.GEMINI_MAX_TOKENS,
-                        ),
-                        request_options={"timeout": 60}
+                        )
                     )
+                )
 
-                # Extract and parse JSON from response
-                parsed_data = self._extract_json(response.text)
+            # Extract and parse JSON from response
+            parsed_data = self._extract_json(response.text)
 
-                # Validate and convert to ParsedReceipt
-                receipt = self._validate_and_build_receipt(parsed_data)
+            # Validate and convert to ParsedReceipt
+            receipt = self._validate_and_build_receipt(parsed_data)
 
-                return receipt
+            return receipt
 
-            except Exception as e:
-                last_error = e
-                print(f"Gemini attempt {attempt + 1} failed: {str(e)}")
-
-                if attempt < max_retries - 1:
-                    import time
-                    time.sleep(2)  # Wait 2 seconds before retry
-                    continue
-                else:
-                    raise Exception(f"Gemini parsing failed after {max_retries} attempts: {str(last_error)}")
+        except Exception as e:
+            print(f"❌ Gemini parsing error: {str(e)}")  # Better logging
+            raise Exception(f"Gemini parsing failed: {str(e)}")
 
     def _build_prompt(self, ocr_text: Optional[str], ocr_blocks: Optional[list]) -> str:
         """
@@ -216,7 +223,7 @@ Your response must be a single JSON object with this exact structure:
         # Total matches sum of items (with tolerance)
         if receipt.total and receipt.items:
             items_sum = sum(item.price or 0 for item in receipt.items)
-            if abs(receipt.total - items_sum) < 1.0:  # Within $1
+            if abs(receipt.total - items_sum) < 1.0:  # Within ₱1
                 confidence_factors.append(0.95)
             else:
                 confidence_factors.append(0.6)
