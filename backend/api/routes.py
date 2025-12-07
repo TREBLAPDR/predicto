@@ -5,11 +5,16 @@ import time
 import base64
 from io import BytesIO
 from PIL import Image
+from datetime import datetime, timedelta
 from models.schemas import (
     ProcessReceiptRequest,
     ProcessReceiptResponse,
     ParsedReceipt,
-    ReceiptItem
+    ReceiptItem,
+    CreateShareRequest,
+    ShareInfo,
+    ShareLinkResponse,
+    AccessSharedListResponse,
 )
 from services.gemini_service import GeminiService
 from config import settings
@@ -159,6 +164,109 @@ async def upload_image(file: UploadFile = File(...)):
         })
     except Exception as e:
         raise HTTPException(500, f"Upload failed: {str(e)}")
+
+# In-memory storage for demo (use database in production)
+shared_lists_db = {}
+
+@router.post("/share/create", response_model=ShareLinkResponse)
+async def create_share_link(request: CreateShareRequest):
+    """Create a shareable link for a shopping list"""
+    import secrets
+
+    try:
+        # Generate unique share ID
+        share_id = secrets.token_urlsafe(8).upper()[:8]
+
+        # Calculate expiration
+        created_at = datetime.now()
+        expires_at = created_at + timedelta(days=request.daysValid)
+
+        # Store shared list
+        shared_lists_db[share_id] = {
+            "listId": request.listId,
+            "listName": request.listName,
+            "items": request.items,
+            "permission": request.permission,
+            "createdAt": created_at.isoformat(),
+            "expiresAt": expires_at.isoformat(),
+        }
+
+        share_info = ShareInfo(
+            shareId=share_id,
+            listId=request.listId,
+            listName=request.listName,
+            createdAt=created_at.isoformat(),
+            expiresAt=expires_at.isoformat(),
+            itemCount=len(request.items),
+            permission=request.permission,
+        )
+
+        return ShareLinkResponse(success=True, shareInfo=share_info)
+
+    except Exception as e:
+        return ShareLinkResponse(success=False, error=str(e))
+
+@router.get("/share/{share_id}", response_model=AccessSharedListResponse)
+async def access_shared_list(share_id: str):
+    """Access a shared list via share ID"""
+    try:
+        share_id = share_id.upper().strip()
+
+        if share_id not in shared_lists_db:
+            raise HTTPException(404, "Share link not found")
+
+        shared_data = shared_lists_db[share_id]
+
+        # Check if expired
+        expires_at = datetime.fromisoformat(shared_data["expiresAt"])
+        is_expired = datetime.now() > expires_at
+
+        if is_expired:
+            return AccessSharedListResponse(
+                success=False,
+                expired=True,
+                error="This share link has expired"
+            )
+
+        share_info = ShareInfo(
+            shareId=share_id,
+            listId=shared_data["listId"],
+            listName=shared_data["listName"],
+            createdAt=shared_data["createdAt"],
+            expiresAt=shared_data["expiresAt"],
+            itemCount=len(shared_data["items"]),
+            permission=shared_data["permission"],
+        )
+
+        list_data = {
+            "listName": shared_data["listName"],
+            "items": shared_data["items"],
+            "createdAt": shared_data["createdAt"],
+            "storeName": None,
+        }
+
+        return AccessSharedListResponse(
+            success=True,
+            expired=False,
+            shareInfo=share_info,
+            list=list_data,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        return AccessSharedListResponse(success=False, error=str(e))
+
+@router.delete("/share/{share_id}")
+async def delete_share_link(share_id: str):
+    """Delete a share link"""
+    share_id = share_id.upper().strip()
+
+    if share_id in shared_lists_db:
+        del shared_lists_db[share_id]
+        return {"success": True, "message": "Share link deleted"}
+
+    raise HTTPException(404, "Share link not found")
 
 @router.get("/gemini-status")
 async def gemini_status():

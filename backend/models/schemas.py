@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from datetime import datetime, timedelta
 
 class ReceiptItem(BaseModel):
     name: str
@@ -34,3 +35,32 @@ class ProcessReceiptResponse(BaseModel):
     error: Optional[str] = None
     processingTimeMs: int
     method: str  # "gemini" or "basic"
+
+class CreateShareRequest(BaseModel):
+    listId: str
+    listName: str
+    items: List[dict]
+    permission: str = "edit"  # view, edit, admin
+    daysValid: int = 7
+
+class ShareInfo(BaseModel):
+    shareId: str
+    listId: str
+    listName: str
+    ownerName: str = "Someone"
+    createdAt: str
+    expiresAt: str
+    itemCount: int
+    permission: str
+
+class ShareLinkResponse(BaseModel):
+    success: bool
+    shareInfo: Optional[ShareInfo] = None
+    error: Optional[str] = None
+
+class AccessSharedListResponse(BaseModel):
+    success: bool
+    expired: bool = False
+    shareInfo: Optional[ShareInfo] = None
+    list: Optional[dict] = None
+    error: Optional[str] = None
