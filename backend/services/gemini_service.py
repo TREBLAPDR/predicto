@@ -24,54 +24,60 @@ class GeminiService:
         ocr_blocks: Optional[list] = None
     ) -> ParsedReceipt:
         """
-        Parse receipt using Gemini Pro Vision API
-
-        Args:
-            image_base64: Base64 encoded receipt image (preferred)
-            ocr_text: Fallback OCR text if image not available
-            ocr_blocks: OCR blocks with bounding boxes (optional context)
-
-        Returns:
-            ParsedReceipt object with structured data
+        Parse receipt using Gemini Pro Vision API with retry logic
         """
 
         # Build the prompt
         prompt = self._build_prompt(ocr_text, ocr_blocks)
 
-        try:
-            # If image is provided, use vision capabilities
-            if image_base64:
-                image_bytes = base64.b64decode(image_base64)
-                image = Image.open(BytesIO(image_bytes))
+        max_retries = 2
+        last_error = None
 
-                # Generate content with image + text prompt
-                response = self.model.generate_content(
-                    [prompt, image],
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=settings.GEMINI_TEMPERATURE,
-                        max_output_tokens=settings.GEMINI_MAX_TOKENS,
+        for attempt in range(max_retries):
+            try:
+                # If image is provided, use vision capabilities
+                if image_base64:
+                    image_bytes = base64.b64decode(image_base64)
+                    image = Image.open(BytesIO(image_bytes))
+
+                    # Generate content with image + text prompt
+                    response = self.model.generate_content(
+                        [prompt, image],
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=settings.GEMINI_TEMPERATURE,
+                            max_output_tokens=settings.GEMINI_MAX_TOKENS,
+                        ),
+                        request_options={"timeout": 60}  # 60 second timeout
                     )
-                )
-            else:
-                # Text-only mode (fallback)
-                response = self.model.generate_content(
-                    prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=settings.GEMINI_TEMPERATURE,
-                        max_output_tokens=settings.GEMINI_MAX_TOKENS,
+                else:
+                    # Text-only mode (fallback)
+                    response = self.model.generate_content(
+                        prompt,
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=settings.GEMINI_TEMPERATURE,
+                            max_output_tokens=settings.GEMINI_MAX_TOKENS,
+                        ),
+                        request_options={"timeout": 60}
                     )
-                )
 
-            # Extract and parse JSON from response
-            parsed_data = self._extract_json(response.text)
+                # Extract and parse JSON from response
+                parsed_data = self._extract_json(response.text)
 
-            # Validate and convert to ParsedReceipt
-            receipt = self._validate_and_build_receipt(parsed_data)
+                # Validate and convert to ParsedReceipt
+                receipt = self._validate_and_build_receipt(parsed_data)
 
-            return receipt
+                return receipt
 
-        except Exception as e:
-            raise Exception(f"Gemini parsing failed: {str(e)}")
+            except Exception as e:
+                last_error = e
+                print(f"Gemini attempt {attempt + 1} failed: {str(e)}")
+
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(2)  # Wait 2 seconds before retry
+                    continue
+                else:
+                    raise Exception(f"Gemini parsing failed after {max_retries} attempts: {str(last_error)}")
 
     def _build_prompt(self, ocr_text: Optional[str], ocr_blocks: Optional[list]) -> str:
         """
