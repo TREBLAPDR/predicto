@@ -2,6 +2,8 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, timedelta
 
+# ==================== RECEIPT & PARSING SCHEMAS ====================
+
 class ReceiptItem(BaseModel):
     name: str
     price: Optional[float] = None
@@ -36,6 +38,8 @@ class ProcessReceiptResponse(BaseModel):
     processingTimeMs: int
     method: str  # "gemini" or "basic"
 
+# ==================== SHARING SCHEMAS ====================
+
 class CreateShareRequest(BaseModel):
     listId: str
     listName: str
@@ -64,3 +68,51 @@ class AccessSharedListResponse(BaseModel):
     shareInfo: Optional[ShareInfo] = None
     list: Optional[dict] = None
     error: Optional[str] = None
+
+# ==================== PRODUCT SCHEMAS ====================
+
+class ProductBase(BaseModel):
+    name: str
+    category: str
+    typical_price: Optional[float] = None
+
+class ProductCreate(ProductBase):
+    pass
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    typical_price: Optional[float] = None
+
+class ProductResponse(ProductBase):
+    id: str
+    purchase_count: int
+    last_purchased_date: Optional[datetime] = None
+    average_days_between_purchases: Optional[float] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class ProductSearchResponse(BaseModel):
+    products: List[ProductResponse]
+    total: int
+
+class PurchaseRecordRequest(BaseModel):
+    product_id: str
+    purchase_date: Optional[datetime] = None
+    price: Optional[float] = None
+    quantity: float = 1.0
+    store_name: Optional[str] = None
+
+class AssociatedProductResponse(BaseModel):
+    product: ProductResponse
+    confidence: float
+    co_purchase_count: int
+
+class PredictionResponse(BaseModel):
+    product: ProductResponse
+    confidence: float
+    days_since_purchase: int
+    expected_days: float
