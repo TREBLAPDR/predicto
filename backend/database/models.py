@@ -1,51 +1,47 @@
-from sqlalchemy import Column, String, Float, Integer, DateTime, Text, Boolean, ForeignKey, Index
-from sqlalchemy.sql import func
+from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey
+from sqlalchemy.orm import relationship
 from datetime import datetime
-from .connection import Base
+import uuid
 
-class Product(Base):
-    __tablename__ = "products"
+# Import Base from connection (This now works!)
+from database.connection import Base
 
-    id = Column(String, primary_key=True)
-    name = Column(String(200), nullable=False, index=True)
-    category = Column(String(50), nullable=False, index=True)
-    typical_price = Column(Float, nullable=True)
-    last_purchased_date = Column(DateTime, nullable=True)
-    purchase_count = Column(Integer, default=0)
-    average_days_between_purchases = Column(Float, nullable=True)
+class ShoppingList(Base):
+    __tablename__ = "shopping_lists"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    store_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # For search optimization
-    __table_args__ = (
-        Index('idx_name_category', 'name', 'category'),
-        Index('idx_purchase_date', 'last_purchased_date'),
-    )
+    # Relationships
+    items = relationship("ShoppingItem", back_populates="shopping_list", cascade="all, delete-orphan")
 
-class ProductAssociation(Base):
-    __tablename__ = "product_associations"
+class ShoppingItem(Base):
+    __tablename__ = "shopping_items"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    product_a_id = Column(String, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
-    product_b_id = Column(String, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
-    co_purchase_count = Column(Integer, default=1)
-    confidence = Column(Float, default=0.5)  # 0-1 confidence score
-    last_purchased_together = Column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        Index('idx_product_pair', 'product_a_id', 'product_b_id'),
-    )
-
-class PurchaseHistory(Base):
-    __tablename__ = "purchase_history"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    product_id = Column(String, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
-    purchase_date = Column(DateTime, nullable=False, index=True)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    list_id = Column(String, ForeignKey("shopping_lists.id"), nullable=False)
+    name = Column(String, nullable=False)
+    qty = Column(Float, default=1.0)
     price = Column(Float, nullable=True)
-    quantity = Column(Float, default=1.0)
-    store_name = Column(String(200), nullable=True)
+    category = Column(String, default="Other")
+    is_purchased = Column(Integer, default=0) # SQLite/PG boolean handling
 
-    __table_args__ = (
-        Index('idx_product_date', 'product_id', 'purchase_date'),
-    )
+    # Relationships
+    shopping_list = relationship("ShoppingList", back_populates="items")
+
+# NEW: Product Learning Table
+class Product(Base):
+    __tablename__ = "products"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, index=True)
+    category = Column(String)
+    typical_price = Column(Float, nullable=True)
+    purchase_count = Column(Integer, default=1)
+    last_purchased_date = Column(DateTime, default=datetime.utcnow)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

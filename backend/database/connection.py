@@ -1,27 +1,18 @@
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from database.models import Base
+from sqlalchemy.orm import sessionmaker, declarative_base # Added declarative_base
 
-# 1. Get the URL from Render
+# 1. Get the URL
 DATABASE_URL = os.getenv("DATABASE_URL")
-
 if not DATABASE_URL:
-    raise ValueError("DATABASE_URL is not set. Check your Render Environment Variables.")
+    raise ValueError("DATABASE_URL is not set")
 
-# ==========================================
-# 🔧 THE RENDER FIX (CRITICAL)
-# Render forces "postgresql://", but we need "postgresql+asyncpg://"
-# This block fixes the URL automatically.
-# ==========================================
+# RENDER FIX
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
-# 2. Create the Async Engine
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=True, # Set to False in production
-)
+# 2. Create Engine
+engine = create_async_engine(DATABASE_URL, echo=True)
 
 # 3. Create Session Factory
 AsyncSessionLocal = sessionmaker(
@@ -30,13 +21,19 @@ AsyncSessionLocal = sessionmaker(
     expire_on_commit=False,
 )
 
-# 4. Dependency for API Routes
+# 4. Define Base HERE (Breaks the circular import)
+Base = declarative_base()
+
+# 5. Dependency
 async def get_session():
     async with AsyncSessionLocal() as session:
         yield session
 
-# 5. Database Initialization (Create Tables)
+# 6. Init DB
 async def init_db():
+    # IMPORT MODELS HERE (Local import prevents circular dependency)
+    # We need to import them so SQLAlchemy knows the tables exist before creating them.
+    from database import models
+
     async with engine.begin() as conn:
-        # This creates tables if they don't exist
         await conn.run_sync(Base.metadata.create_all)
