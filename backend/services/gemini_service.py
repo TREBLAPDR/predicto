@@ -113,13 +113,20 @@ Your response must be a single JSON object with this exact structure:
   "parsingConfidence": 0.90
 }
 
+**CRITICAL PRICE RULES:**
+1. "price" field must ALWAYS be the UNIT PRICE (price per single item)
+2. If you see "2 @ PCK" with total 180.50, the unit price is 90.25 (180.50 ÷ 2)
+3. If you see "1 @ PC" with 178.25, the unit price is 178.25
+4. NEVER put the total price in the "price" field when qty > 1
+5. Formula: unit_price = line_total ÷ quantity
+
 **Parsing Rules:**
 1. Extract the store/merchant name from the top of the receipt
 2. Find the date in format YYYY-MM-DD (convert if needed)
 3. For each item line, extract:
    - name: The product/item description
-   - price: The unit or total price for that item
-   - qty: Quantity purchased (default to 1.0 if not shown)
+   - price: The UNIT price (if qty=2 and total=180, price should be 90)
+   - qty: Quantity purchased (look for patterns like "2 @ PCK", "1 @ PC")
    - confidence: Your confidence in this extraction (0.0-1.0)
 4. Identify subtotal (before tax), tax amount, and final total
 5. Set parsingConfidence based on receipt quality and extraction certainty
@@ -130,9 +137,16 @@ Your response must be a single JSON object with this exact structure:
 **Price Alignment Rules:**
 - Match item names with their corresponding prices using spatial position
 - Prices are typically right-aligned on receipts
-- If multiple numbers appear on a line, the rightmost is usually the price
-- Ignore department codes, item codes, and tax indicators (T, F markers)
+- If multiple numbers appear on a line, the rightmost is usually the LINE TOTAL
+- Look for quantity indicators: "@ PC", "@ PCK", "@ PROM", "x2", "2 pcs", etc.
+- If quantity > 1, divide the line total by quantity to get unit price
 
+**Example:**
+Input: "COOKIES 2 @ PCK  90.25  180.50"
+Output: {"name": "COOKIES", "price": 90.25, "qty": 2.0, "confidence": 0.95}
+
+Input: "SOAP 1 @ PC  155.50  155.50"
+Output: {"name": "SOAP", "price": 155.50, "qty": 1.0, "confidence": 0.95}
 """
 
         # Add OCR context if available
