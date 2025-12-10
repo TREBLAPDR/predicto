@@ -87,78 +87,89 @@ class GeminiService:
             raise Exception(f"Gemini parsing failed: {str(e)}")
 
     def _build_prompt(self, ocr_text: Optional[str], ocr_blocks: Optional[list]) -> str:
-        """
-        Build the prompt for Gemini with strict JSON output requirements
-        """
+            """
+            Build the prompt for Gemini with strict JSON output requirements
+            """
 
-        prompt = """You are an expert receipt parser. Analyze this receipt image or OCR text and extract structured information.
+            prompt = """You are an expert receipt parser. Analyze this receipt image or OCR text and extract structured information.
 
-**CRITICAL: You must respond with ONLY valid JSON. No markdown, no explanation, no preamble.**
+    **CRITICAL: You must respond with ONLY valid JSON. No markdown, no explanation, no preamble.**
 
-Your response must be a single JSON object with this exact structure:
-{
-  "storeName": "string or null",
-  "date": "YYYY-MM-DD or null",
-  "items": [
+    Your response must be a single JSON object with this exact structure:
     {
-      "name": "item name",
-      "price": 12.99,
-      "qty": 1.0,
-      "confidence": 0.95
+      "storeName": "string or null",
+      "date": "YYYY-MM-DD or null",
+      "items": [
+        {
+          "name": "item name",
+          "price": 12.99,
+          "qty": 1.0,
+          "confidence": 0.95
+        }
+      ],
+      "subtotal": 45.67,
+      "tax": 3.65,
+      "total": 49.32,
+      "parsingConfidence": 0.90
     }
-  ],
-  "subtotal": 45.67,
-  "tax": 3.65,
-  "total": 49.32,
-  "parsingConfidence": 0.90
-}
 
-**CRITICAL PRICE RULES:**
-1. "price" field must ALWAYS be the UNIT PRICE (price per single item)
-2. If you see "2 @ PCK" with total 180.50, the unit price is 90.25 (180.50 ÷ 2)
-3. If you see "1 @ PC" with 178.25, the unit price is 178.25
-4. NEVER put the total price in the "price" field when qty > 1
-5. Formula: unit_price = line_total ÷ quantity
+    **UNIVERSAL PRICE LOGIC (THE "GOLDEN RULE"):**
+    Your goal is to ALWAYS find the **UNIT PRICE** (price of 1 item).
+    1. **Look for explicit markers:** symbols like `@`, `ea`, `/pc`, `P`, `PHP`. (e.g., `@P10.00ea` means Unit Price is 10.00).
+    2. **Look for column alignment:** Qty is usually far left. Line Total is usually far right. Unit Price is often in the middle.
+    3. **Calculate if missing:** If you only see Qty and Line Total, calculate: `Unit Price = Line Total / Qty`.
+    4. **Discount Logic:** If you see `(P85.00 - 20.00%)`, the real price is the final discounted value.
 
-**Parsing Rules:**
-1. Extract the store/merchant name from the top of the receipt
-2. Find the date in format YYYY-MM-DD (convert if needed)
-3. For each item line, extract:
-   - name: The product/item description
-   - price: The UNIT price (if qty=2 and total=180, price should be 90)
-   - qty: Quantity purchased (look for patterns like "2 @ PCK", "1 @ PC")
-   - confidence: Your confidence in this extraction (0.0-1.0)
-4. Identify subtotal (before tax), tax amount, and final total
-5. Set parsingConfidence based on receipt quality and extraction certainty
-6. If a field cannot be determined, use null (not empty string)
-7. Prices must be numbers (float), not strings
-8. Exclude non-product lines (payment methods, change, thank you messages)
+    **LAYOUT ADAPTATION STRATEGIES:**
 
-**Price Alignment Rules:**
-- Match item names with their corresponding prices using spatial position
-- Prices are typically right-aligned on receipts
-- If multiple numbers appear on a line, the rightmost is usually the LINE TOTAL
-- Look for quantity indicators: "@ PC", "@ PCK", "@ PROM", "x2", "2 pcs", etc.
-- If quantity > 1, divide the line total by quantity to get unit price
+    **Type A: Standard (Single Line)**
+    *Format:* `Qty   Item Name   Unit Price   Line Total`
+    *Action:* Extract directly.
 
-**Example:**
-Input: "COOKIES 2 @ PCK  90.25  180.50"
-Output: {"name": "COOKIES", "price": 90.25, "qty": 2.0, "confidence": 0.95}
+    **Type B: Split Line (Name First)**
+    *Format:* Line 1: `Item Name (e.g. STIK-O BIG CHOCO)`
+    Line 2: `Qty @ Unit Price Line Total`
+    *Action:* Associate Line 2's numbers with Line 1's text.
 
-Input: "SOAP 1 @ PC  155.50  155.50"
-Output: {"name": "SOAP", "price": 155.50, "qty": 1.0, "confidence": 0.95}
-"""
+    **Type C: Split Line (Details/Price Second)**
+    *Format:*
+    Line 1: `Qty   Code   Item Name   Line Total (e.g. 2 PVC Adapter 20.00)`
+    Line 2: `Size/Details   @Unit_Price (e.g. @P10.00ea)`
+    *Action:* Take the Name and Qty from Line 1. Take the Unit Price from Line 2. Verify that Qty * Unit Price ≈ Line Total.
 
-        # Add OCR context if available
-        if ocr_text:
-            prompt += f"\n**OCR Extracted Text:**\n```\n{ocr_text[:2000]}\n```\n"
+    **Parsing Rules:**
+    1. **Store Name:** Extract from the top.
+    2. **Date:** Find YYYY-MM-DD.
+    3. **Items:**
+       - **Name:** Clean up codes (like "BB5043") if they clutter the name, but keep the main description. Remove `****`.
+       - **Qty:** Default to 1.0 if not found.
+       - **Price:** MUST be the price of ONE item.
+    4. **Ignore:** 'Terminal', 'Cashier', 'Time', 'SI#', 'VAT Reg'.
 
-        if ocr_blocks:
-            prompt += f"\n**Number of OCR blocks detected:** {len(ocr_blocks)}\n"
+    **Examples:**
 
-        prompt += "\n**Now output ONLY the JSON object, nothing else:**"
+    *Input (Type B):*
+    "CREAM-O COOKIES
+     2 @ PCK 90.25 180.50"
+    *Output:* `{"name": "CREAM-O COOKIES", "qty": 2, "price": 90.25}`
 
-        return prompt
+    *Input (Type C):*
+    "2 PVC Female Adapter    20.00
+      1/2 PVC @P10.00ea"
+    *Output:* `{"name": "PVC Female Adapter 1/2 PVC", "qty": 2, "price": 10.00}`
+
+    """
+
+            # Add OCR context if available
+            if ocr_text:
+                prompt += f"\n**OCR Extracted Text:**\n```\n{ocr_text[:2000]}\n```\n"
+
+            if ocr_blocks:
+                prompt += f"\n**Number of OCR blocks detected:** {len(ocr_blocks)}\n"
+
+            prompt += "\n**Now output ONLY the JSON object, nothing else:**"
+
+            return prompt
 
     def _extract_json(self, response_text: str) -> Dict[str, Any]:
         """
