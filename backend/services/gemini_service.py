@@ -113,52 +113,59 @@ class GeminiService:
       "parsingConfidence": 0.90
     }
 
-    **UNIVERSAL PRICE LOGIC (THE "GOLDEN RULE"):**
-    Your goal is to ALWAYS find the **UNIT PRICE** (price of 1 item).
-    1. **Look for explicit markers:** symbols like `@`, `ea`, `/pc`, `P`, `PHP`. (e.g., `@P10.00ea` means Unit Price is 10.00).
-    2. **Look for column alignment:** Qty is usually far left. Line Total is usually far right. Unit Price is often in the middle.
-    3. **Calculate if missing:** If you only see Qty and Line Total, calculate: `Unit Price = Line Total / Qty`.
-    4. **Discount Logic:** If you see `(P85.00 - 20.00%)`, the real price is the final discounted value.
+    **THE "MATH VERIFICATION" RULE (CRITICAL):**
+    To decide which number is the **UNIT PRICE**, you must perform a math check on every line:
+    1. **Scenario A (3 Numbers):** You see `Qty`, `Num1`, and `Num2`.
+       - Check: Does `Qty * Num1 ≈ Num2`?
+       - If YES -> `Num1` is the Unit Price.
+       - *Example:* `2 @ 90.25 180.50`. Since `2 * 90.25 = 180.50`, then **90.25** is the price. Do NOT divide 90.25 again.
 
-    **LAYOUT ADAPTATION STRATEGIES:**
+    2. **Scenario B (2 Numbers):** You only see `Qty` and `Num1`.
+       - Check: Is `Num1` surprisingly large compared to similar items?
+       - Assume `Num1` is the **Line Total**.
+       - Calculate: `Unit Price = Num1 / Qty`.
+       - *Example:* `2 items ... 180.50`. Price is `90.25`.
 
-    **Type A: Standard (Single Line)**
-    *Format:* `Qty   Item Name   Unit Price   Line Total`
-    *Action:* Extract directly.
+    3. **Scenario C (Explicit Markers):** You see symbols like `@`, `P`, `ea`.
+       - `@ 90.25` usually means 90.25 is the Unit Price.
+       - `P15.00ea` means 15.00 is the Unit Price.
 
-    **Type B: Split Line (Name First)**
-    *Format:* Line 1: `Item Name (e.g. STIK-O BIG CHOCO)`
-    Line 2: `Qty @ Unit Price Line Total`
-    *Action:* Associate Line 2's numbers with Line 1's text.
+    **LAYOUT ADAPTATION:**
+    - **Standard Columns:** `Qty | Name | Unit Price | Total`
+    - **Split Line (Type 1):** Name on Line 1. `Qty @ Unit Price Total` on Line 2. (Common in Philippines).
+    - **Split Line (Type 2):** `Qty Name Total` on Line 1. `Details @Unit` on Line 2.
 
-    **Type C: Split Line (Details/Price Second)**
-    *Format:*
-    Line 1: `Qty   Code   Item Name   Line Total (e.g. 2 PVC Adapter 20.00)`
-    Line 2: `Size/Details   @Unit_Price (e.g. @P10.00ea)`
-    *Action:* Take the Name and Qty from Line 1. Take the Unit Price from Line 2. Verify that Qty * Unit Price ≈ Line Total.
+    **Specific Examples to Guide You:**
+
+    *Input (Willy Style):*
+    "CREAM-O COOKIES
+     2 @ PCK 90.25 180.50"
+    *Analysis:* I see 2, 90.25, and 180.50. Math check: 2 * 90.25 = 180.50. Correct.
+    *Output:* `{"name": "CREAM-O COOKIES", "qty": 2, "price": 90.25}`
+
+    *Input (Ipil Style):*
+    "2 PVC Adapter    20.00
+      @P10.00ea"
+    *Analysis:* I see Qty 2 and Total 20.00. I also see explicit "@P10.00ea".
+    *Output:* `{"name": "PVC Adapter", "qty": 2, "price": 10.00}`
 
     **Parsing Rules:**
     1. **Store Name:** Extract from the top.
     2. **Date:** Find YYYY-MM-DD.
-    3. **Items:**
-       - **Name:** Clean up codes (like "BB5043") if they clutter the name, but keep the main description. Remove `****`.
-       - **Qty:** Default to 1.0 if not found.
-       - **Price:** MUST be the price of ONE item.
-    4. **Ignore:** 'Terminal', 'Cashier', 'Time', 'SI#', 'VAT Reg'.
-
-    **Examples:**
-
-    *Input (Type B):*
-    "CREAM-O COOKIES
-     2 @ PCK 90.25 180.50"
-    *Output:* `{"name": "CREAM-O COOKIES", "qty": 2, "price": 90.25}`
-
-    *Input (Type C):*
-    "2 PVC Female Adapter    20.00
-      1/2 PVC @P10.00ea"
-    *Output:* `{"name": "PVC Female Adapter 1/2 PVC", "qty": 2, "price": 10.00}`
-
+    3. **Items:** Remove `****` or codes like `885043` if they clutter the name.
+    4. **Price:** Must ALWAYS be the price of ONE single item.
     """
+
+            # Add OCR context if available
+            if ocr_text:
+                prompt += f"\n**OCR Extracted Text:**\n```\n{ocr_text[:2000]}\n```\n"
+
+            if ocr_blocks:
+                prompt += f"\n**Number of OCR blocks detected:** {len(ocr_blocks)}\n"
+
+            prompt += "\n**Now output ONLY the JSON object, nothing else:**"
+
+            return prompt
 
             # Add OCR context if available
             if ocr_text:
