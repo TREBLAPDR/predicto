@@ -1,0 +1,47 @@
+name: shopping_list_ai
+description: AI-powered shopping list with receipt scanning
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.2
+  shared_preferences: ^2.2.2
+  http: ^1.2.0
+  path_provider: ^2.1.1
+  camera: ^0.10.5+9
+  path: ^1.8.3
+  image: ^4.1.7
+  google_mlkit_text_recognition: ^0.11.0
+  app_links: ^6.3.0
+  video_player: ^2.8.1
+  shadcn_ui: ^0.40.4 # Check for the latest version
+  animated_text_kit: ^4.2.2
+  google_fonts: ^6.0.0 # Recommended for Shadcn typography
+  audioplayers: ^6.5.1
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/logo.png"
+  adaptive_icon_foreground: "assets/logo_refactor.png"
+  adaptive_icon_background: "#ffffff"
+
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/video/
+    - assets/logo.png
+    - assets/audio/welcome.mp3
