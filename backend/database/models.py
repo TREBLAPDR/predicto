@@ -14,7 +14,6 @@ class ShoppingList(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String, nullable=False)
     store_name = Column(String, nullable=True)
-    # New columns to match your Flutter app
     status = Column(String, default="active")
     is_completed = Column(Boolean, default=False)
 
@@ -34,7 +33,7 @@ class ShoppingItem(Base):
     price = Column(Float, nullable=True)
     category = Column(String, default="Other")
     is_purchased = Column(Integer, default=0) # 0=False, 1=True
-    notes = Column(String, nullable=True)     # Added missing column
+    notes = Column(String, nullable=True)
 
     # Relationships
     shopping_list = relationship("ShoppingList", back_populates="items")
@@ -51,7 +50,7 @@ class Product(Base):
     purchase_count = Column(Integer, default=1)
     last_purchased_date = Column(DateTime, default=datetime.utcnow)
 
-    # This was the missing column causing your 500 error
+    # This matches the column we added in SQL
     average_days_between_purchases = Column(Float, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)

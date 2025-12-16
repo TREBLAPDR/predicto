@@ -8,8 +8,6 @@ import 'settings_service.dart';
 
 class SuggestionService {
   static const String _keyPurchaseHistory = 'purchase_history';
-  static const int _maxHistoryItems = 500;
-
   static SuggestionService? _instance;
   late SharedPreferences _prefs;
 
@@ -23,61 +21,73 @@ class SuggestionService {
     return _instance!;
   }
 
-  /// Record purchased items to history
+  // =========================================================
+  // 1. RECORD PURCHASES (Syncs to Backend for AI)
+  // =========================================================
+
+  /// Records purchased items to the Backend Database so the AI can learn.
   Future<void> recordPurchases(List<ShoppingListItem> items) async {
-    final history = await getPurchaseHistory();
-    final now = DateTime.now();
-
-    for (final item in items.where((i) => i.isPurchased)) {
-      history.add(PurchaseHistory(
-        itemName: item.name.toLowerCase().trim(),
-        purchaseDate: now,
-        category: item.category,
-        price: item.price,
-      ));
-    }
-
-    // Keep only last 500 items
-    if (history.length > _maxHistoryItems) {
-      history.removeRange(0, history.length - _maxHistoryItems);
-    }
-
-    await _savePurchaseHistory(history);
-  }
-
-  /// Get full purchase history
-  Future<List<PurchaseHistory>> getPurchaseHistory() async {
-    final String? json = _prefs.getString(_keyPurchaseHistory);
-    if (json == null) return [];
-
     try {
-      final List<dynamic> data = jsonDecode(json);
-      return data.map((e) => PurchaseHistory.fromJson(e)).toList();
+      final settings = await SettingsService.getInstance();
+      final baseUrl = settings.backendUrl;
+
+      // Filter only purchased items
+      final purchasedItems = items.where((i) => i.isPurchased).toList();
+
+      for (final item in purchasedItems) {
+        // 1. Save to local history (fast fallback)
+        await _saveToLocalHistory(item);
+
+        // 2. Send to Backend (For AI Analysis)
+        if (baseUrl.isNotEmpty) {
+          try {
+            await http.post(
+              Uri.parse('$baseUrl/api/products/purchase'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({
+                'product_id': 'unknown', // Backend will match by name
+                'name': item.name, // Important: Send name so backend can find/create product
+                'purchase_date': DateTime.now().toIso8601String(),
+                'price': item.price,
+                'quantity': item.qty,
+                'store_name': 'Unknown', // You can pass store name if available
+              }),
+            );
+          } catch (e) {
+            print("Failed to sync item ${item.name} to backend: $e");
+          }
+        }
+      }
     } catch (e) {
-      return [];
+      print("Error recording purchases: $e");
     }
   }
 
-  Future<void> _savePurchaseHistory(List<PurchaseHistory> history) async {
-    final String json = jsonEncode(history.map((e) => e.toJson()).toList());
-    await _prefs.setString(_keyPurchaseHistory, json);
-  }
-
   // =========================================================
-  // NEW: AI SUGGESTION METHODS
+  // 2. GET AI SUGGESTIONS (From Backend/Gemini)
   // =========================================================
 
-  /// Call the backend to get AI-generated suggestions
   Future<List<ItemSuggestion>> getAISuggestions() async {
     try {
       final settings = await SettingsService.getInstance();
+
+      // If no backend URL is set, return empty
+      if (settings.backendUrl.isEmpty) {
+        print("No backend URL configured");
+        return [];
+      }
+
       final url = Uri.parse('${settings.backendUrl}/api/suggestions/ai');
 
-      // Use a longer timeout for AI generation (25 seconds)
+      // 25s timeout because AI reasoning takes time
       final response = await http.get(url).timeout(const Duration(seconds: 25));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
+
+        // Safety check: ensure 'suggestions' exists
+        if (data['suggestions'] == null) return [];
+
         final List<dynamic> suggestionsJson = data['suggestions'];
 
         return suggestionsJson.map((json) {
@@ -86,41 +96,92 @@ class SuggestionService {
             category: json['category'] ?? 'Other',
             estimatedPrice: json['estimatedPrice']?.toDouble(),
             confidence: json['confidence']?.toDouble() ?? 0.0,
-            // Map the reason to your enum, or default to frequentlyPurchased
-            reason: SuggestionReason.frequentlyPurchased,
+            reason: _mapReason(json['reason']),
             relatedItems: [],
           );
         }).toList();
       } else {
-        print('Failed to load AI suggestions: ${response.statusCode}');
+        print('AI Error: ${response.statusCode} - ${response.body}');
         return [];
       }
     } catch (e) {
-      print('AI Suggestion Error: $e');
+      print('AI Connection Error: $e');
       return [];
     }
   }
 
-  /// Local logic fallback (existing functionality)
+  // =========================================================
+  // 3. STANDARD / LOCAL SUGGESTIONS (Fallback)
+  // =========================================================
+
   Future<List<ItemSuggestion>> generateSuggestions({
     required List<ShoppingListItem> currentList,
     int maxSuggestions = 10,
   }) async {
-    // Return dummy data or implement local logic here
-    // This allows the "Standard" tab to still work
-    return [
-      ItemSuggestion(
-        itemName: 'Rice',
-        category: 'Pantry',
-        confidence: 0.8,
+    // Simple local logic: suggest items from history not currently in list
+    final history = await _getLocalHistory();
+    final currentNames = currentList.map((i) => i.name.toLowerCase()).toSet();
+
+    final suggestions = <ItemSuggestion>[];
+
+    // Sort history by frequency (simple mock logic)
+    // In a real app, you'd group by name and count
+    final uniqueItems = <String>{};
+
+    for (final item in history.reversed) {
+      if (suggestions.length >= maxSuggestions) break;
+      if (currentNames.contains(item.itemName.toLowerCase())) continue;
+      if (uniqueItems.contains(item.itemName.toLowerCase())) continue;
+
+      uniqueItems.add(item.itemName.toLowerCase());
+      suggestions.add(ItemSuggestion(
+        itemName: item.itemName,
+        category: item.category,
+        confidence: 0.5, // Default low confidence for local
         reason: SuggestionReason.frequentlyPurchased,
-      ),
-      ItemSuggestion(
-        itemName: 'Eggs',
-        category: 'Dairy',
-        confidence: 0.75,
-        reason: SuggestionReason.runningLow,
-      ),
-    ];
+      ));
+    }
+
+    return suggestions;
+  }
+
+  // =========================================================
+  // PRIVATE HELPERS
+  // =========================================================
+
+  Future<void> _saveToLocalHistory(ShoppingListItem item) async {
+    final history = await _getLocalHistory();
+    history.add(PurchaseHistory(
+      itemName: item.name,
+      purchaseDate: DateTime.now(),
+      category: item.category,
+      price: item.price,
+    ));
+
+    // Limit local history size
+    if (history.length > 500) {
+      history.removeRange(0, history.length - 500);
+    }
+
+    final jsonList = history.map((e) => e.toJson()).toList();
+    await _prefs.setString(_keyPurchaseHistory, jsonEncode(jsonList));
+  }
+
+  Future<List<PurchaseHistory>> _getLocalHistory() async {
+    final String? json = _prefs.getString(_keyPurchaseHistory);
+    if (json == null) return [];
+    try {
+      final List<dynamic> data = jsonDecode(json);
+      return data.map((e) => PurchaseHistory.fromJson(e)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  SuggestionReason _mapReason(String? reasonText) {
+    if (reasonText == null) return SuggestionReason.frequentlyPurchased;
+    if (reasonText.toLowerCase().contains("season")) return SuggestionReason.seasonalTrend;
+    if (reasonText.toLowerCase().contains("low")) return SuggestionReason.runningLow;
+    return SuggestionReason.frequentlyPurchased;
   }
 }
