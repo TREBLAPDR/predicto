@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Opening Shopping List...</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 40px; }
+        .btn {
+            background: #007bff; color: white; padding: 15px 30px;
+            text-decoration: none; border-radius: 25px; display: inline-block; margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+<h2>Opening Shared List...</h2>
+<p>If the app doesn't open automatically, click the button below.</p>
+
+<a id="appLink" href="#" class="btn">Open in App</a>
+
+<script>
+    // 1. Get the Share ID from the URL (e.g., ?id=123)
+    const urlParams = new URLSearchParams(window.location.search);
+    const shareId = urlParams.get('id');
+
+    if (shareId) {
+        // 2. Construct your Custom Deep Link
+        const deepLink = "shoplist://share/" + shareId;
+
+        // 3. Set the button link (backup)
+        document.getElementById("appLink").href = deepLink;
+
+        // 4. Automatically try to open the app
+        window.location.href = deepLink;
+
+        // Optional: If they don't have the app, redirect to Play Store after a timeout
+        // setTimeout(function() {
+        //     window.location.href = "https://play.google.com/store/apps/details?id=YOUR_PACKAGE_NAME";
+        // }, 2000);
+    } else {
+        document.body.innerHTML = "<h2>Error: No Share ID found.</h2>";
+    }
+</script>
+</body>
+</html>

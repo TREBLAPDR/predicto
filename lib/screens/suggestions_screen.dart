@@ -47,6 +47,7 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTicker
     if (!mounted) return;
     setState(() => _isLoadingStandard = true);
 
+    // Existing logic for standard suggestions
     final results = await _suggestionService.generateSuggestions(
         currentList: widget.currentItems,
         maxSuggestions: 15
@@ -125,7 +126,7 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTicker
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF09090B),
+      backgroundColor: const Color(0xFF09090B), // Matches your app's Zinc background
       appBar: AppBar(
         title: const Text('Suggestions', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
         backgroundColor: const Color(0xFF09090B),
@@ -139,6 +140,7 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTicker
           indicatorColor: Colors.blue,
           labelColor: Colors.white,
           unselectedLabelColor: Colors.grey,
+          dividerColor: Colors.white10,
           tabs: const [
             Tab(text: "Standard"),
             Tab(text: "AI Insights ✨"),
@@ -242,7 +244,7 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTicker
         final item = items[index];
         return ShadCard(
           padding: const EdgeInsets.all(16),
-          backgroundColor: const Color(0xFF18181B),
+          backgroundColor: const Color(0xFF18181B), // Zinc 900 for cards
           border: isAI
               ? ShadBorder.all(color: Colors.purple.withOpacity(0.5), width: 1)
               : ShadBorder.all(color: Colors.white.withOpacity(0.1)),

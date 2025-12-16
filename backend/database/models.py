@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey
+from sqlalchemy import Column, String, Float, DateTime, Integer, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -14,6 +14,10 @@ class ShoppingList(Base):
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String, nullable=False)
     store_name = Column(String, nullable=True)
+    # New columns to match your Flutter app
+    status = Column(String, default="active")
+    is_completed = Column(Boolean, default=False)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -30,6 +34,7 @@ class ShoppingItem(Base):
     price = Column(Float, nullable=True)
     category = Column(String, default="Other")
     is_purchased = Column(Integer, default=0) # 0=False, 1=True
+    notes = Column(String, nullable=True)     # Added missing column
 
     # Relationships
     shopping_list = relationship("ShoppingList", back_populates="items")
@@ -45,6 +50,9 @@ class Product(Base):
     typical_price = Column(Float, nullable=True)
     purchase_count = Column(Integer, default=1)
     last_purchased_date = Column(DateTime, default=datetime.utcnow)
+
+    # This was the missing column causing your 500 error
+    average_days_between_purchases = Column(Float, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
