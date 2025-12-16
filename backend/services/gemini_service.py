@@ -81,41 +81,141 @@ class GeminiService:
             return ParsedReceipt(parsingConfidence=0.0, items=[])
 
     # =========================================================
-    # 2. AI SUGGESTIONS (Aggressive Mode)
+    # 2. AI SUGGESTIONS (FIXED VERSION)
     # =========================================================
 
     async def generate_suggestions(self, purchase_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Generate shopping suggestions based on purchase history
+        FIXED: Better prompt, no strict JSON mode, better error handling
         """
-        prompt = self._build_suggestion_prompt(purchase_history)
+        prompt = self._build_suggestion_prompt_v2(purchase_history)
 
         try:
             loop = asyncio.get_event_loop()
 
-            # Use strict JSON mode and aggressive temperature
+            print("🤖 [DEBUG] Sending request to Gemini...")
+            print(f"📝 [DEBUG] History items: {len(purchase_history)}")
+
+            # REMOVED strict JSON mode - let the model be more flexible
             response = await loop.run_in_executor(
                 None,
                 partial(
                     self.suggestion_model.generate_content,
                     prompt,
                     generation_config=genai.types.GenerationConfig(
-                        temperature=0.5,
+                        temperature=0.7,  # INCREASED for more creativity
                         max_output_tokens=2000,
-                        response_mime_type="application/json"
+                        # REMOVED: response_mime_type="application/json"
                     )
                 )
             )
 
+            print(f"📥 [DEBUG] Raw response length: {len(response.text)}")
+            print(f"📥 [DEBUG] First 500 chars: {response.text[:500]}")
+
+            # Extract and parse JSON
             result = self._extract_json(response.text)
-            return result.get('suggestions', [])
+
+            if not result:
+                print("❌ [DEBUG] Failed to extract JSON from response")
+                return []
+
+            suggestions = result.get('suggestions', [])
+            print(f"✅ [DEBUG] Extracted {len(suggestions)} suggestions")
+
+            # Validate each suggestion has required fields
+            valid_suggestions = []
+            for s in suggestions:
+                if 'name' in s and 'category' in s:
+                    valid_suggestions.append(s)
+                else:
+                    print(f"⚠️ [DEBUG] Skipping invalid suggestion: {s}")
+
+            return valid_suggestions
 
         except Exception as e:
             print(f"❌ Gemini suggestion error: {str(e)}")
+            import traceback
+            print(f"📋 Stack trace: {traceback.format_exc()}")
             return []
 
     # =========================================================
-    # 3. PROMPT BUILDERS
+    # 3. IMPROVED PROMPT BUILDER
+    # =========================================================
+
+    def _build_suggestion_prompt_v2(self, history: List[Dict[str, Any]]) -> str:
+        """
+        IMPROVED: More explicit examples and clearer instructions
+        """
+        # Format history in a readable way
+        history_text = "**Purchase History:**\n"
+        for idx, item in enumerate(history[:20], 1):  # Limit to 20 items
+            days = item.get('days_ago', 0)
+            freq = item.get('frequency', 'unknown')
+            history_text += f"{idx}. {item['name']} ({item['category']}) - Last bought {days} days ago"
+            if freq and freq != 'unknown':
+                history_text += f", usually every {freq:.1f} days"
+            history_text += f"\n"
+
+        return f"""You are an intelligent shopping assistant analyzing purchase patterns.
+
+{history_text}
+
+**YOUR TASK:**
+Generate 5-10 smart shopping suggestions based on this purchase history.
+
+**SUGGESTION LOGIC:**
+1. **Replenishment Items**: Items that are due for repurchase based on frequency
+   - Example: If milk is bought every 7 days and was last bought 10 days ago → SUGGEST IT
+
+2. **Complementary Items**: Items commonly bought together
+   - Example: If pasta was bought recently → suggest pasta sauce, cheese, or ground beef
+
+3. **Seasonal/Pattern Items**: Items that fit user's shopping patterns
+   - Example: If user buys personal care items regularly → suggest items in that category
+
+4. **Smart Defaults**: If history is limited, suggest common household essentials
+   - Examples: Rice, Eggs, Bread, Cooking Oil, Sugar, Salt
+
+**CONFIDENCE SCORING:**
+- 0.9-1.0: Definitely needed (overdue replenishment)
+- 0.7-0.8: Highly likely (complementary or seasonal)
+- 0.5-0.6: Good suggestion (pattern-based)
+
+**OUTPUT FORMAT:**
+Return ONLY a JSON object (no markdown, no explanation) with this structure:
+
+{{
+  "suggestions": [
+    {{
+      "name": "Bear Brand Powdered Milk 300g",
+      "category": "Dairy",
+      "confidence": 0.95,
+      "reason": "Last purchased 10 days ago, usually bought every 7 days",
+      "estimatedPrice": 110.0
+    }},
+    {{
+      "name": "Pasta Sauce",
+      "category": "Pantry",
+      "confidence": 0.75,
+      "reason": "You bought pasta 2 days ago, sauce is often needed",
+      "estimatedPrice": 75.0
+    }}
+  ]
+}}
+
+**IMPORTANT RULES:**
+- Generate AT LEAST 5 suggestions
+- DO NOT return an empty suggestions array
+- Use realistic Philippine product names and prices
+- Each suggestion must have: name, category, confidence, reason, estimatedPrice
+- Make the "reason" field personalized and specific
+
+Now generate the suggestions based on the purchase history above."""
+
+    # =========================================================
+    # 4. ORIGINAL RECEIPT PROMPT (UNCHANGED)
     # =========================================================
 
     def _build_receipt_prompt(self, ocr_text: Optional[str], ocr_blocks: Optional[list]) -> str:
@@ -174,70 +274,47 @@ To decide which number is the **UNIT PRICE**, you must perform a math check on e
 
         return prompt
 
-    def _build_suggestion_prompt(self, history: List[Dict[str, Any]]) -> str:
-        history_str = json.dumps(history, indent=2)
-
-        return f"""
-        You are a shopping assistant.
-
-        **User History:**
-        {history_str}
-
-        **TASK:**
-        Identify 5-10 items the user likely needs NOW.
-
-        **LOGIC:**
-        1. **Replenishment:** If (days_ago > frequency), suggest it.
-        2. **Complementary:** If bought Pasta, suggest Sauce/Cheese. If bought Detergent, suggest Softener.
-        3. **Staples:** If history is sparse, suggest common items (Rice, Eggs, Oil) if not bought recently.
-
-        **CONSTRAINT:**
-        RETURN A JSON OBJECT. DO NOT RETURN EMPTY LISTS. GUESS IF NECESSARY.
-
-        **FORMAT:**
-        {{
-            "suggestions": [
-                {{
-                    "name": "Item Name",
-                    "category": "Category",
-                    "confidence": 0.85,
-                    "reason": "You bought Pasta yesterday, you might need this.",
-                    "estimatedPrice": 100.00
-                }}
-            ]
-        }}
-        """
-
     # =========================================================
-    # 4. HELPERS (JSON Extraction & Validation)
+    # 5. IMPROVED JSON EXTRACTION
     # =========================================================
 
     def _extract_json(self, response_text: str) -> Dict[str, Any]:
+        """
+        IMPROVED: Better JSON extraction with multiple fallback strategies
+        """
         text = response_text.strip()
 
-        # Method 1: Try direct parse
+        # Strategy 1: Direct JSON parse
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        # Method 2: Extract from ```json ... ``` markdown
-        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except:
-                pass
+        # Strategy 2: Extract from markdown code blocks
+        patterns = [
+            r'```json\s*(\{.*?\})\s*```',  # ```json {...} ```
+            r'```\s*(\{.*?\})\s*```',       # ``` {...} ```
+            r'(\{.*\})',                     # Any {...}
+        ]
 
-        # Method 3: Fallback - look for the first { and last }
+        for pattern in patterns:
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except:
+                    continue
+
+        # Strategy 3: Find first { to last }
         start = text.find('{')
         end = text.rfind('}')
-        if start != -1 and end != -1:
+        if start != -1 and end != -1 and end > start:
             try:
                 return json.loads(text[start:end+1])
             except:
                 pass
 
+        print(f"⚠️ [DEBUG] Could not extract JSON from: {text[:200]}")
         return {}
 
     def _validate_and_build_receipt(self, data: Dict[str, Any]) -> ParsedReceipt:
