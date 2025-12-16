@@ -38,7 +38,6 @@ class GeminiService:
         """
         Parse receipt using Gemini Pro Vision API
         """
-        # Build the prompt with your CRITICAL rules
         prompt = self._build_receipt_prompt(ocr_text, ocr_blocks)
 
         try:
@@ -97,16 +96,14 @@ class GeminiService:
             print("🤖 [DEBUG] Sending request to Gemini...")
             print(f"📝 [DEBUG] History items: {len(purchase_history)}")
 
-            # REMOVED strict JSON mode - let the model be more flexible
             response = await loop.run_in_executor(
                 None,
                 partial(
                     self.suggestion_model.generate_content,
                     prompt,
                     generation_config=genai.types.GenerationConfig(
-                        temperature=0.7,  # INCREASED for more creativity
-                        max_output_tokens=4000,  # INCREASED from 2000
-                        # REMOVED: response_mime_type="application/json"
+                        temperature=0.7,
+                        max_output_tokens=4000,
                     )
                 )
             )
@@ -114,14 +111,11 @@ class GeminiService:
             print(f"📥 [DEBUG] Raw response length: {len(response.text)}")
             print(f"📥 [DEBUG] First 500 chars: {response.text[:500]}")
 
-            # Check if response looks truncated
             if len(response.text) > 0 and not response.text.rstrip().endswith('}'):
                 print("⚠️ [DEBUG] Response appears truncated, missing closing brace")
 
-            # FULL response for debugging
             print(f"📥 [DEBUG] FULL RESPONSE:\n{response.text}")
 
-            # Extract and parse JSON
             result = self._extract_json(response.text)
 
             if not result:
@@ -131,7 +125,6 @@ class GeminiService:
             suggestions = result.get('suggestions', [])
             print(f"✅ [DEBUG] Extracted {len(suggestions)} suggestions")
 
-            # Validate each suggestion has required fields
             valid_suggestions = []
             for s in suggestions:
                 if 'name' in s and 'category' in s:
@@ -155,9 +148,8 @@ class GeminiService:
         """
         IMPROVED: More explicit examples and clearer instructions
         """
-        # Format history in a readable way
         history_text = "**Purchase History:**\n"
-        for idx, item in enumerate(history[:20], 1):  # Limit to 20 items
+        for idx, item in enumerate(history[:20], 1):
             days = item.get('days_ago', 0)
             freq = item.get('frequency', 'unknown')
             history_text += f"{idx}. {item['name']} ({item['category']}) - Last bought {days} days ago"
@@ -293,33 +285,8 @@ To decide which number is the **UNIT PRICE**, you must perform a math check on e
 
         # Strategy 1: Remove markdown code fences first
         if text.startswith('```'):
-            # Remove opening ```json or ```
             text = re.sub(r'^```(?:json)?\s*', '', text)
-            # Remove closing ```
-            text = re.sub(r'\s*```
-
-    def _validate_and_build_receipt(self, data: Dict[str, Any]) -> ParsedReceipt:
-        items = []
-        for item_data in data.get('items', []):
-            try:
-                items.append(ReceiptItem(
-                    name=str(item_data.get('name', 'Unknown')),
-                    price=float(item_data['price']) if item_data.get('price') is not None else None,
-                    qty=float(item_data.get('qty', 1.0)),
-                    confidence=float(item_data.get('confidence', 0.8))
-                ))
-            except (KeyError, ValueError, TypeError):
-                continue
-
-        return ParsedReceipt(
-            storeName=data.get('storeName'),
-            date=data.get('date'),
-            items=items,
-            subtotal=float(data['subtotal']) if data.get('subtotal') is not None else None,
-            tax=float(data['tax']) if data.get('tax') is not None else None,
-            total=float(data['total']) if data.get('total') is not None else None,
-            parsingConfidence=float(data.get('parsingConfidence', 0.7))
-        ), '', text)
+            text = re.sub(r'\s*```\s*$', '', text)
             text = text.strip()
 
         # Strategy 2: Direct JSON parse (after cleaning)
@@ -327,15 +294,12 @@ To decide which number is the **UNIT PRICE**, you must perform a math check on e
             return json.loads(text)
         except json.JSONDecodeError as e:
             print(f"⚠️ [DEBUG] JSON parse error: {str(e)}")
-            pass
 
         # Strategy 3: Extract from markdown code blocks (if still present)
-        patterns = [
-            r'```json\s*(\{.*?\})\s*```',  # ```json {...} ```
-            r'```\s*(\{.*?\})\s*```',       # ``` {...} ```
-        ]
+        json_pattern = r'```json\s*(\{.*?\})\s*```'
+        generic_pattern = r'```\s*(\{.*?\})\s*```'
 
-        for pattern in patterns:
+        for pattern in [json_pattern, generic_pattern]:
             match = re.search(pattern, response_text, re.DOTALL)
             if match:
                 try:
@@ -353,7 +317,6 @@ To decide which number is the **UNIT PRICE**, you must perform a math check on e
                 return json.loads(json_str)
             except Exception as e:
                 print(f"⚠️ [DEBUG] Brace extraction failed: {str(e)}")
-                pass
 
         print(f"⚠️ [DEBUG] All extraction strategies failed")
         print(f"⚠️ [DEBUG] Response preview: {response_text[:300]}")
