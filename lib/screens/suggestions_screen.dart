@@ -19,318 +19,280 @@ class SuggestionsScreen extends StatefulWidget {
   State<SuggestionsScreen> createState() => _SuggestionsScreenState();
 }
 
-class _SuggestionsScreenState extends State<SuggestionsScreen> {
-  List<ItemSuggestion> _suggestions = [];
-  bool _isLoading = true;
-  final Set<String> _selectedSuggestions = {};
+class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTickerProviderStateMixin {
+  late SuggestionService _suggestionService;
+  List<ItemSuggestion> _standardSuggestions = [];
+  List<ItemSuggestion> _aiSuggestions = [];
+
+  bool _isLoadingStandard = true;
+  bool _isLoadingAI = false;
+  bool _aiLoaded = false;
+
+  int _addedCount = 0;
+  late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
-    _loadSuggestions();
+    _tabController = TabController(length: 2, vsync: this);
+    _loadData();
   }
 
-  Future<void> _loadSuggestions() async {
-    setState(() => _isLoading = true);
+  Future<void> _loadData() async {
+    _suggestionService = await SuggestionService.getInstance();
+    _loadStandardSuggestions();
+  }
+
+  Future<void> _loadStandardSuggestions() async {
+    if (!mounted) return;
+    setState(() => _isLoadingStandard = true);
+
+    final results = await _suggestionService.generateSuggestions(
+        currentList: widget.currentItems,
+        maxSuggestions: 15
+    );
+
+    if (mounted) {
+      setState(() {
+        _standardSuggestions = results;
+        _isLoadingStandard = false;
+      });
+    }
+  }
+
+  Future<void> _loadAISuggestions() async {
+    if (_aiLoaded && _aiSuggestions.isNotEmpty) return;
+
+    setState(() {
+      _isLoadingAI = true;
+    });
 
     try {
-      final suggestionService = await SuggestionService.getInstance();
-      final suggestions = await suggestionService.generateSuggestions(
-        currentList: widget.currentItems,
-        maxSuggestions: 10,
-      );
-
+      final aiResults = await _suggestionService.getAISuggestions();
       if (mounted) {
         setState(() {
-          _suggestions = suggestions;
-          _isLoading = false;
+          _aiSuggestions = aiResults;
+          _isLoadingAI = false;
+          _aiLoaded = true;
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() => _isLoadingAI = false);
         ShadToaster.of(context).show(
-          ShadToast.destructive(
-            title: const Text('Error'),
-            description: Text('Failed to load suggestions: $e'),
-          ),
+          ShadToast.destructive(title: const Text('AI Error'), description: Text(e.toString())),
         );
       }
     }
   }
 
-  Future<void> _addSelectedToList() async {
-    if (_selectedSuggestions.isEmpty) return;
-
-    showShadDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator()),
-    );
-
+  Future<void> _addItem(ItemSuggestion suggestion, bool isAI) async {
     try {
-      final shoppingListService = await ShoppingListService.getInstance();
-      var currentList = await shoppingListService.getListById(widget.listId);
+      final listService = await ShoppingListService.getInstance();
 
-      if (currentList == null) throw Exception('List not found');
+      final newItem = ShoppingListItem(
+        id: DateTime.now().microsecondsSinceEpoch.toString(),
+        name: suggestion.itemName,
+        price: suggestion.estimatedPrice,
+        qty: 1.0,
+        category: suggestion.category,
+        notes: isAI ? "AI Suggested" : null,
+      );
 
-      int addedCount = 0;
-      for (final itemName in _selectedSuggestions) {
-        final suggestion = _suggestions.firstWhere((s) => s.itemName == itemName);
+      await listService.addItem(widget.listId, newItem);
 
-        // Check for duplicates
-        final existingItem = currentList.items.firstWhere(
-              (item) => item.name.toLowerCase() == suggestion.itemName.toLowerCase(),
-          orElse: () => ShoppingListItem(id: '', name: '', qty: 0, category: ''),
-        );
-
-        if (existingItem.id.isNotEmpty) continue;
-
-        final newItem = ShoppingListItem(
-          id: '${DateTime.now().microsecondsSinceEpoch}_$addedCount',
-          name: suggestion.itemName,
-          price: suggestion.estimatedPrice,
-          qty: 1.0,
-          category: suggestion.category,
-        );
-
-        await shoppingListService.addItem(currentList.id, newItem);
-        addedCount++;
-        await Future.delayed(const Duration(milliseconds: 2));
-      }
+      setState(() {
+        if (isAI) {
+          _aiSuggestions.remove(suggestion);
+        } else {
+          _standardSuggestions.remove(suggestion);
+        }
+        _addedCount++;
+      });
 
       if (!mounted) return;
-      Navigator.pop(context);
-      Navigator.pop(context, addedCount);
-
-    } catch (e) {
-      if (!mounted) return;
-      Navigator.pop(context);
       ShadToaster.of(context).show(
-        ShadToast.destructive(
-          title: const Text('Error'),
-          description: Text('Failed to add items: $e'),
+        ShadToast(
+          title: const Text('Added'),
+          description: Text('${suggestion.itemName} added to list'),
         ),
       );
+    } catch (e) {
+      // Handle error
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF09090B), // Zinc 950
+      backgroundColor: const Color(0xFF09090B),
       appBar: AppBar(
-        title: const Text('AI Insights', style: TextStyle(fontWeight: FontWeight.w600)),
-        centerTitle: true,
+        title: const Text('Suggestions', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
         backgroundColor: const Color(0xFF09090B),
-        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
         leading: IconButton(
-          icon: const Icon(LucideIcons.arrowLeft, color: Colors.white70),
-          onPressed: () => Navigator.pop(context),
+          icon: const Icon(LucideIcons.arrowLeft),
+          onPressed: () => Navigator.pop(context, _addedCount),
+        ),
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: Colors.blue,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.grey,
+          tabs: const [
+            Tab(text: "Standard"),
+            Tab(text: "AI Insights ✨"),
+          ],
+          onTap: (index) {
+            if (index == 1 && !_aiLoaded) {
+              _loadAISuggestions();
+            }
+          },
         ),
       ),
-      body: Stack(
+      body: TabBarView(
+        controller: _tabController,
         children: [
-          _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : _suggestions.isEmpty
-              ? _buildEmptyState()
-              : ListView.builder(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-            itemCount: _suggestions.length,
-            itemBuilder: (context, index) {
-              return _buildSuggestionCard(_suggestions[index]);
-            },
-          ),
+          // Standard Tab
+          _buildSuggestionList(_standardSuggestions, _isLoadingStandard, false),
 
-          // Floating Action Bar (Glassmorphism effect)
-          if (_selectedSuggestions.isNotEmpty)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      const Color(0xFF09090B).withOpacity(1.0),
-                      const Color(0xFF09090B).withOpacity(0.0),
-                    ],
-                  ),
-                ),
-                child: ShadButton(
-                  size: ShadButtonSize.lg,
-                  onPressed: _addSelectedToList,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(LucideIcons.circlePlus, size: 20),
-                      const SizedBox(width: 8),
-                      Text('Add ${_selectedSuggestions.length} Items'),
-                    ],
-                  ),
-                ),
+          // AI Tab
+          _buildAITab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAITab() {
+    if (_isLoadingAI) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(color: Colors.purple),
+            const SizedBox(height: 16),
+            Text(
+              "Consulting Gemini AI...",
+              style: TextStyle(color: Colors.purple.shade200, fontSize: 16),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              "Analyzing purchase history patterns",
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (!_aiLoaded && _aiSuggestions.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(LucideIcons.sparkles, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            const Text("Unlock AI Insights", style: TextStyle(color: Colors.white, fontSize: 18)),
+            const SizedBox(height: 8),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 40),
+              child: Text(
+                "Gemini can analyze your habits and seasonality to predict what you need next.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey),
               ),
             ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSuggestionCard(ItemSuggestion suggestion) {
-    final isSelected = _selectedSuggestions.contains(suggestion.itemName);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: GestureDetector(
-        onTap: () {
-          setState(() {
-            if (isSelected) {
-              _selectedSuggestions.remove(suggestion.itemName);
-            } else {
-              _selectedSuggestions.add(suggestion.itemName);
-            }
-          });
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF27272A) : const Color(0xFF18181B), // Zinc 800 vs 900
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: isSelected ? Colors.white24 : Colors.white10,
-              width: 1,
-            ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Selection Indicator
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Icon(
-                    isSelected ? LucideIcons.circleCheck : LucideIcons.circle,
-                    color: isSelected ? Colors.white : Colors.grey[700],
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 16),
-
-                // Content
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            suggestion.itemName,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                          // Price
-                          if (suggestion.estimatedPrice != null)
-                            Text(
-                              '\u20B1${suggestion.estimatedPrice!.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontFamily: 'Roboto',
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF4ADE80),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-
-                      // Reason & Match Score Row
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.05),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Row(
-                              children: [
-                                // UPDATED: Using Icon widget for LucideIcons
-                                Icon(
-                                    suggestion.reason.icon,
-                                    size: 14,
-                                    color: Colors.blue.shade300
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  suggestion.reason.displayText,
-                                  style: const TextStyle(fontSize: 11, color: Colors.white70),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const Spacer(),
-                          Text(
-                            '${(suggestion.confidence * 100).toInt()}% Match',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: _getConfidenceColor(suggestion.confidence),
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      if (suggestion.relatedItems.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          'Pairs with: ${suggestion.relatedItems.join(", ")}',
-                          style: TextStyle(fontSize: 11, color: Colors.grey.shade600, fontStyle: FontStyle.italic),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+            const SizedBox(height: 24),
+            ShadButton(
+              onPressed: _loadAISuggestions,
+              backgroundColor: Colors.purple,
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(LucideIcons.brainCircuit, size: 18),
+                  SizedBox(width: 8),
+                  Text("Generate Suggestions"),
+                ],
+              ),
+            )
+          ],
         ),
-      ),
-    );
+      );
+    }
+
+    return _buildSuggestionList(_aiSuggestions, false, true);
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(LucideIcons.brainCircuit, size: 64, color: Colors.grey.shade800),
-          const SizedBox(height: 16),
-          const Text(
-            'No Insights Yet',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.white70),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Scan more receipts to unlock AI predictions.',
-            style: TextStyle(fontSize: 14, color: Colors.grey.shade600),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _buildSuggestionList(List<ItemSuggestion> items, bool isLoading, bool isAI) {
+    if (isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
 
-  Color _getConfidenceColor(double confidence) {
-    if (confidence >= 0.8) return const Color(0xFF4ADE80); // Green 400
-    if (confidence >= 0.6) return const Color(0xFFFACC15); // Yellow 400
-    return const Color(0xFF94A3B8); // Slate 400
+    if (items.isEmpty) {
+      return const Center(
+        child: Text("No suggestions found", style: TextStyle(color: Colors.grey)),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: items.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final item = items[index];
+        return ShadCard(
+          padding: const EdgeInsets.all(16),
+          backgroundColor: const Color(0xFF18181B),
+          border: isAI
+              ? ShadBorder.all(color: Colors.purple.withOpacity(0.5), width: 1)
+              : ShadBorder.all(color: Colors.white.withOpacity(0.1)),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: isAI ? Colors.purple.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                    isAI ? LucideIcons.sparkles : LucideIcons.history,
+                    color: isAI ? Colors.purple : Colors.blue,
+                    size: 20
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.itemName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: Colors.white,
+                      ),
+                    ),
+                    if (isAI && item.confidence > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          "Confidence: ${(item.confidence * 100).toStringAsFixed(0)}%",
+                          style: TextStyle(color: Colors.purple.shade200, fontSize: 12),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              ShadButton.outline(
+                size: ShadButtonSize.sm,
+                onPressed: () => _addItem(item, isAI),
+                child: const Icon(LucideIcons.plus, size: 16),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

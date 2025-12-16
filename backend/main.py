@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 # Import routers and database init
 from api.routes import router
 from api.products import router as products_router
+from api.suggestions import router as suggestions_router # NEW IMPORT
 from database.connection import init_db
 
 # Lifespan context manager for startup/shutdown logic
@@ -37,6 +38,7 @@ app.add_middleware(
 # Include API routes
 app.include_router(router, prefix="/api", tags=["receipt"])
 app.include_router(products_router, prefix="/api", tags=["products"])
+app.include_router(suggestions_router, prefix="/api", tags=["suggestions"]) # REGISTER NEW ROUTER
 
 @app.get("/")
 async def root():
@@ -51,6 +53,7 @@ async def root():
             "health": "/health",
             "gemini_status": "/api/gemini-status",
             "products": "/api/products",
+            "suggestions": "/api/suggestions/ai"
         }
     }
 

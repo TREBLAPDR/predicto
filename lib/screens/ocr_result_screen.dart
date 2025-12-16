@@ -4,7 +4,6 @@ import 'package:shadcn_ui/shadcn_ui.dart';
 import '../models/ocr_result.dart';
 import '../services/backend_service.dart';
 import '../services/settings_service.dart';
-import '../models/receipt_models.dart';
 import '../ai/confidence_analyzer.dart';
 import 'parsed_receipt_screen.dart';
 

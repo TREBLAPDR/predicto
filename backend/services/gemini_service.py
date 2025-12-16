@@ -1,5 +1,5 @@
 import google.generativeai as genai
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import json
 import re
 from PIL import Image
@@ -7,6 +7,7 @@ from io import BytesIO
 import base64
 import asyncio
 from functools import partial
+from datetime import datetime
 
 from models.schemas import ParsedReceipt, ReceiptItem
 from config import settings
@@ -17,7 +18,12 @@ class GeminiService:
             raise ValueError("Gemini API key not configured. Please set GEMINI_API_KEY in .env")
 
         genai.configure(api_key=settings.GEMINI_API_KEY)
+
+        # Model 1: Receipt Parser
         self.model = genai.GenerativeModel(settings.GEMINI_MODEL)
+
+        # Model 2: AI Suggestion Engine (NEW)
+        self.suggestion_model = genai.GenerativeModel(settings.GEMINI_MODEL_2)
 
     async def parse_receipt(
         self,
@@ -27,14 +33,6 @@ class GeminiService:
     ) -> ParsedReceipt:
         """
         Parse receipt using Gemini Pro Vision API
-
-        Args:
-            image_base64: Base64 encoded receipt image (preferred)
-            ocr_text: Fallback OCR text if image not available
-            ocr_blocks: OCR blocks with bounding boxes (optional context)
-
-        Returns:
-            ParsedReceipt object with structured data
         """
 
         # Build the prompt
@@ -86,129 +84,156 @@ class GeminiService:
             print(f"❌ Gemini parsing error: {str(e)}")  # Better logging
             raise Exception(f"Gemini parsing failed: {str(e)}")
 
+    async def generate_suggestions(self, purchase_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Generate shopping suggestions based on purchase history using GEMINI_MODEL_2
+        """
+        prompt = self._build_suggestion_prompt(purchase_history)
+
+        try:
+            loop = asyncio.get_event_loop()
+
+            # Use the SECOND model for reasoning
+            response = await loop.run_in_executor(
+                None,
+                partial(
+                    self.suggestion_model.generate_content,
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7, # Slightly higher for creativity
+                        max_output_tokens=1000,
+                    )
+                )
+            )
+
+            result = self._extract_json(response.text)
+            return result.get('suggestions', [])
+
+        except Exception as e:
+            print(f"❌ Gemini suggestion error: {str(e)}")
+            return []
+
+    def _build_suggestion_prompt(self, history: List[Dict[str, Any]]) -> str:
+        """
+        Construct a context-aware prompt for the AI
+        """
+        current_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Convert history to a lightweight string format to save tokens
+        history_str = json.dumps(history[:50], indent=2) # Limit to top 50 relevant items
+
+        return f"""
+        You are a smart shopping assistant. Today is {current_date}.
+
+        Here is the user's recent product history with purchase stats:
+        {history_str}
+
+        **Your Task:**
+        Suggest 5-10 items the user likely needs to buy NEXT.
+
+        **Reasoning Logic:**
+        1. **Depletion:** If they buy Milk every 7 days and last bought it 8 days ago, suggest it.
+        2. **Complementary:** If they recently bought 'Burger Patties', suggest 'Buns' even if not in history.
+        3. **Habit:** Identify weekly/monthly patterns.
+        4. **Seasonality:** Suggest items relevant to the current month if applicable.
+
+        **Output Format:**
+        Return ONLY valid JSON containing a list of suggestions.
+        {{
+            "suggestions": [
+                {{
+                    "name": "Item Name",
+                    "category": "Category Name",
+                    "confidence": 0.95,
+                    "reason": "You usually buy this every 7 days",
+                    "estimatedPrice": 120.00
+                }}
+            ]
+        }}
+        """
+
     def _build_prompt(self, ocr_text: Optional[str], ocr_blocks: Optional[list]) -> str:
-            """
-            Build the prompt for Gemini with strict JSON output requirements
-            """
+        """
+        Build the prompt for Gemini with strict JSON output requirements
+        """
+        prompt = """You are an expert receipt parser. Analyze this receipt image or OCR text and extract structured information.
 
-            prompt = """You are an expert receipt parser. Analyze this receipt image or OCR text and extract structured information.
+**CRITICAL: You must respond with ONLY valid JSON. No markdown, no explanation, no preamble.**
 
-    **CRITICAL: You must respond with ONLY valid JSON. No markdown, no explanation, no preamble.**
-
-    Your response must be a single JSON object with this exact structure:
+Your response must be a single JSON object with this exact structure:
+{
+  "storeName": "string or null",
+  "date": "YYYY-MM-DD or null",
+  "items": [
     {
-      "storeName": "string or null",
-      "date": "YYYY-MM-DD or null",
-      "items": [
-        {
-          "name": "item name",
-          "price": 12.99,
-          "qty": 1.0,
-          "confidence": 0.95
-        }
-      ],
-      "subtotal": 45.67,
-      "tax": 3.65,
-      "total": 49.32,
-      "parsingConfidence": 0.90
+      "name": "item name",
+      "price": 12.99,
+      "qty": 1.0,
+      "confidence": 0.95
     }
+  ],
+  "subtotal": 45.67,
+  "tax": 3.65,
+  "total": 49.32,
+  "parsingConfidence": 0.90
+}
 
-    **THE "MATH VERIFICATION" RULE (CRITICAL):**
-    To decide which number is the **UNIT PRICE**, you must perform a math check on every line:
-    1. **Scenario A (3 Numbers):** You see `Qty`, `Num1`, and `Num2`.
-       - Check: Does `Qty * Num1 ≈ Num2`?
-       - If YES -> `Num1` is the Unit Price.
-       - *Example:* `2 @ 90.25 180.50`. Since `2 * 90.25 = 180.50`, then **90.25** is the price. Do NOT divide 90.25 again.
+**THE "MATH VERIFICATION" RULE (CRITICAL):**
+To decide which number is the **UNIT PRICE**, you must perform a math check on every line:
+1. **Scenario A (3 Numbers):** You see `Qty`, `Num1`, and `Num2`.
+   - Check: Does `Qty * Num1 ≈ Num2`?
+   - If YES -> `Num1` is the Unit Price.
+   - *Example:* `2 @ 90.25 180.50`. Since `2 * 90.25 = 180.50`, then **90.25** is the price. Do NOT divide 90.25 again.
 
-    2. **Scenario B (2 Numbers):** You only see `Qty` and `Num1`.
-       - Check: Is `Num1` surprisingly large compared to similar items?
-       - Assume `Num1` is the **Line Total**.
-       - Calculate: `Unit Price = Num1 / Qty`.
-       - *Example:* `2 items ... 180.50`. Price is `90.25`.
+2. **Scenario B (2 Numbers):** You only see `Qty` and `Num1`.
+   - Check: Is `Num1` surprisingly large compared to similar items?
+   - Assume `Num1` is the **Line Total**.
+   - Calculate: `Unit Price = Num1 / Qty`.
+   - *Example:* `2 items ... 180.50`. Price is `90.25`.
 
-    3. **Scenario C (Explicit Markers):** You see symbols like `@`, `P`, `ea`.
-       - `@ 90.25` usually means 90.25 is the Unit Price.
-       - `P15.00ea` means 15.00 is the Unit Price.
+3. **Scenario C (Explicit Markers):** You see symbols like `@`, `P`, `ea`.
+   - `@ 90.25` usually means 90.25 is the Unit Price.
+   - `P15.00ea` means 15.00 is the Unit Price.
 
-    **LAYOUT ADAPTATION:**
-    - **Standard Columns:** `Qty | Name | Unit Price | Total`
-    - **Split Line (Type 1):** Name on Line 1. `Qty @ Unit Price Total` on Line 2. (Common in Philippines).
-    - **Split Line (Type 2):** `Qty Name Total` on Line 1. `Details @Unit` on Line 2.
+**Parsing Rules:**
+1. **Store Name:** Extract from the top.
+2. **Date:** Find YYYY-MM-DD.
+3. **Items:** Remove `****` or codes like `885043` if they clutter the name.
+4. **Price:** Must ALWAYS be the price of ONE single item.
+"""
 
-    **Specific Examples to Guide You:**
+        if ocr_text:
+            prompt += f"\n**OCR Extracted Text:**\n```\n{ocr_text[:2000]}\n```\n"
 
-    *Input (Willy Style):*
-    "CREAM-O COOKIES
-     2 @ PCK 90.25 180.50"
-    *Analysis:* I see 2, 90.25, and 180.50. Math check: 2 * 90.25 = 180.50. Correct.
-    *Output:* `{"name": "CREAM-O COOKIES", "qty": 2, "price": 90.25}`
+        if ocr_blocks:
+            prompt += f"\n**Number of OCR blocks detected:** {len(ocr_blocks)}\n"
 
-    *Input (Ipil Style):*
-    "2 PVC Adapter    20.00
-      @P10.00ea"
-    *Analysis:* I see Qty 2 and Total 20.00. I also see explicit "@P10.00ea".
-    *Output:* `{"name": "PVC Adapter", "qty": 2, "price": 10.00}`
+        prompt += "\n**Now output ONLY the JSON object, nothing else:**"
 
-    **Parsing Rules:**
-    1. **Store Name:** Extract from the top.
-    2. **Date:** Find YYYY-MM-DD.
-    3. **Items:** Remove `****` or codes like `885043` if they clutter the name.
-    4. **Price:** Must ALWAYS be the price of ONE single item.
-    """
-
-            # Add OCR context if available
-            if ocr_text:
-                prompt += f"\n**OCR Extracted Text:**\n```\n{ocr_text[:2000]}\n```\n"
-
-            if ocr_blocks:
-                prompt += f"\n**Number of OCR blocks detected:** {len(ocr_blocks)}\n"
-
-            prompt += "\n**Now output ONLY the JSON object, nothing else:**"
-
-            return prompt
-
-            # Add OCR context if available
-            if ocr_text:
-                prompt += f"\n**OCR Extracted Text:**\n```\n{ocr_text[:2000]}\n```\n"
-
-            if ocr_blocks:
-                prompt += f"\n**Number of OCR blocks detected:** {len(ocr_blocks)}\n"
-
-            prompt += "\n**Now output ONLY the JSON object, nothing else:**"
-
-            return prompt
+        return prompt
 
     def _extract_json(self, response_text: str) -> Dict[str, Any]:
         """
         Extract JSON from Gemini response, handling markdown code blocks
         """
-        # Remove markdown code blocks if present
         text = response_text.strip()
-
-        # Try to find JSON between ```json and ``` or ``` markers
         json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
         if json_match:
             text = json_match.group(1)
 
-        # Find the first { and last }
         start = text.find('{')
         end = text.rfind('}')
 
         if start == -1 or end == -1:
-            raise ValueError("No JSON object found in response")
-
-        json_str = text[start:end+1]
+            return {}
 
         try:
-            return json.loads(json_str)
+            return json.loads(text[start:end+1])
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in response: {str(e)}\nResponse: {json_str[:500]}")
+            # Return empty dict on error instead of crashing
+            return {}
 
     def _validate_and_build_receipt(self, data: Dict[str, Any]) -> ParsedReceipt:
-        """
-        Validate parsed data and build ParsedReceipt object
-        """
-        # Build items list
         items = []
         for item_data in data.get('items', []):
             try:
@@ -219,10 +244,8 @@ class GeminiService:
                     confidence=float(item_data.get('confidence', 0.8))
                 ))
             except (KeyError, ValueError, TypeError):
-                # Skip invalid items
                 continue
 
-        # Build receipt object
         return ParsedReceipt(
             storeName=data.get('storeName'),
             date=data.get('date'),
@@ -234,28 +257,15 @@ class GeminiService:
         )
 
     def calculate_confidence(self, receipt: ParsedReceipt) -> float:
-        """
-        Calculate overall confidence score based on extracted data quality
-        """
         confidence_factors = []
-
-        # Store name found
-        if receipt.storeName:
-            confidence_factors.append(0.9)
-
-        # Date found
-        if receipt.date:
-            confidence_factors.append(0.9)
-
-        # Items extracted
+        if receipt.storeName: confidence_factors.append(0.9)
+        if receipt.date: confidence_factors.append(0.9)
         if receipt.items:
             avg_item_confidence = sum(item.confidence for item in receipt.items) / len(receipt.items)
             confidence_factors.append(avg_item_confidence)
-
-        # Total matches sum of items (with tolerance)
         if receipt.total and receipt.items:
             items_sum = sum(item.price or 0 for item in receipt.items)
-            if abs(receipt.total - items_sum) < 1.0:  # Within ₱1
+            if abs(receipt.total - items_sum) < 1.0:
                 confidence_factors.append(0.95)
             else:
                 confidence_factors.append(0.6)
