@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
+import json
 
 from database.connection import get_session
 from database.models import Product
@@ -15,10 +16,11 @@ async def get_ai_suggestions(
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Get AI-powered suggestions based on purchase history using Gemini Model 2
+    Get AI-powered suggestions based on purchase history
     """
+    print("🔍 [DEBUG] Starting AI Suggestions Request...")
+
     # 1. Fetch relevant product history
-    # We prioritize items bought recently or frequently
     result = await session.execute(
         select(Product)
         .where(Product.purchase_count > 0)
@@ -27,7 +29,10 @@ async def get_ai_suggestions(
     )
     products = result.scalars().all()
 
+    print(f"📦 [DEBUG] Database returned {len(products)} products with purchase history.")
+
     if not products:
+        print("⚠️ [DEBUG] No history found. Returning empty list.")
         return {"suggestions": []}
 
     # 2. Format data for Gemini
@@ -46,12 +51,29 @@ async def get_ai_suggestions(
             "typical_price": p.typical_price
         })
 
-    # 3. Call Gemini Model 2
+    print(f"📝 [DEBUG] Sending context to Gemini: {json.dumps(history_context[:2])} ... (trimmed)")
+
+    # 3. Call Gemini
     try:
         gemini = GeminiService()
+        print(f"🤖 [DEBUG] Using Model: {gemini.suggestion_model.model_name}")
+
         suggestions = await gemini.generate_suggestions(history_context)
+
+        print(f"✅ [DEBUG] Gemini returned {len(suggestions)} suggestions.")
         return {"suggestions": suggestions}
+
     except Exception as e:
-        print(f"Error generating suggestions: {e}")
-        # Return empty list on error instead of crashing UI
-        return {"suggestions": [], "error": str(e)}
+        print(f"❌ [DEBUG] CRITICAL GEMINI ERROR: {str(e)}")
+        # If Gemini fails, return a dummy item so you know the API was reached
+        return {
+            "suggestions": [
+                {
+                    "name": "Error Check Logs",
+                    "category": "System",
+                    "confidence": 1.0,
+                    "reason": f"Check backend console: {str(e)}",
+                    "estimatedPrice": 0.0
+                }
+            ]
+        }
