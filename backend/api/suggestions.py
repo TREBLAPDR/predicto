@@ -15,9 +15,6 @@ async def get_ai_suggestions(
     limit: int = 50,
     session: AsyncSession = Depends(get_session),
 ):
-    """
-    Get AI-powered suggestions based on purchase history
-    """
     print("🔍 [DEBUG] Starting AI Suggestions Request...")
 
     # 1. Fetch relevant product history
@@ -29,29 +26,28 @@ async def get_ai_suggestions(
     )
     products = result.scalars().all()
 
-    print(f"📦 [DEBUG] Database returned {len(products)} products with purchase history.")
+    print(f"📦 [DEBUG] Database returned {len(products)} products.")
 
     if not products:
-        print("⚠️ [DEBUG] No history found. Returning empty list.")
         return {"suggestions": []}
 
     # 2. Format data for Gemini
     history_context = []
     for p in products:
-        days_since = -1
+        days_since = 0
         if p.last_purchased_date:
-            days_since = (datetime.utcnow() - p.last_purchased_date).days
+            # FIX: Handle timezone offset issues (avoid -1 days)
+            diff = datetime.utcnow() - p.last_purchased_date
+            days_since = max(0, diff.days)
 
         history_context.append({
             "name": p.name,
-            "category": p.category,
-            "last_bought_days_ago": days_since,
-            "typical_frequency_days": p.average_days_between_purchases,
-            "purchase_count": p.purchase_count,
-            "typical_price": p.typical_price
+            "category": p.category or "General", # Fallback category
+            "days_ago": days_since, # Renamed for clarity
+            "frequency": p.average_days_between_purchases,
+            "count": p.purchase_count,
+            "price": p.typical_price
         })
-
-    print(f"📝 [DEBUG] Sending context to Gemini: {json.dumps(history_context[:2])} ... (trimmed)")
 
     # 3. Call Gemini
     try:
@@ -64,16 +60,5 @@ async def get_ai_suggestions(
         return {"suggestions": suggestions}
 
     except Exception as e:
-        print(f"❌ [DEBUG] CRITICAL GEMINI ERROR: {str(e)}")
-        # If Gemini fails, return a dummy item so you know the API was reached
-        return {
-            "suggestions": [
-                {
-                    "name": "Error Check Logs",
-                    "category": "System",
-                    "confidence": 1.0,
-                    "reason": f"Check backend console: {str(e)}",
-                    "estimatedPrice": 0.0
-                }
-            ]
-        }
+        print(f"❌ [DEBUG] GEMINI ERROR: {str(e)}")
+        return {"suggestions": []}

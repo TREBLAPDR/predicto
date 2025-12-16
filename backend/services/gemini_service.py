@@ -19,11 +19,15 @@ class GeminiService:
 
         genai.configure(api_key=settings.GEMINI_API_KEY)
 
-        # Model 1: Receipt Parser
+        # Model 1: Receipt Parser (Vision capabilities)
         self.model = genai.GenerativeModel(settings.GEMINI_MODEL)
 
-        # Model 2: AI Suggestion Engine (NEW)
+        # Model 2: AI Suggestion Engine (Reasoning capabilities)
         self.suggestion_model = genai.GenerativeModel(settings.GEMINI_MODEL_2)
+
+    # =========================================================
+    # 1. RECEIPT PARSING
+    # =========================================================
 
     async def parse_receipt(
         self,
@@ -34,7 +38,6 @@ class GeminiService:
         """
         Parse receipt using Gemini Pro Vision API
         """
-
         # Build the prompt
         prompt = self._build_prompt(ocr_text, ocr_blocks)
 
@@ -81,8 +84,13 @@ class GeminiService:
             return receipt
 
         except Exception as e:
-            print(f"❌ Gemini parsing error: {str(e)}")  # Better logging
-            raise Exception(f"Gemini parsing failed: {str(e)}")
+            print(f"❌ Gemini parsing error: {str(e)}")
+            # Return empty/failed receipt rather than crashing
+            return ParsedReceipt(parsingConfidence=0.0, items=[])
+
+    # =========================================================
+    # 2. AI SUGGESTIONS (AGGRESSIVE MODE)
+    # =========================================================
 
     async def generate_suggestions(self, purchase_history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -93,15 +101,16 @@ class GeminiService:
         try:
             loop = asyncio.get_event_loop()
 
-            # Use the SECOND model for reasoning
+            # Use higher temperature for creativity and force JSON response
             response = await loop.run_in_executor(
                 None,
                 partial(
                     self.suggestion_model.generate_content,
                     prompt,
                     generation_config=genai.types.GenerationConfig(
-                        temperature=0.7, # Slightly higher for creativity
+                        temperature=0.6,
                         max_output_tokens=1000,
+                        response_mime_type="application/json"
                     )
                 )
             )
@@ -120,37 +129,42 @@ class GeminiService:
         current_date = datetime.now().strftime("%Y-%m-%d")
 
         # Convert history to a lightweight string format to save tokens
-        history_str = json.dumps(history[:50], indent=2) # Limit to top 50 relevant items
+        history_str = json.dumps(history[:50], indent=2)
 
         return f"""
         You are a smart shopping assistant. Today is {current_date}.
 
-        Here is the user's recent product history with purchase stats:
+        **User's Recent Purchase History:**
         {history_str}
 
         **Your Task:**
-        Suggest 5-10 items the user likely needs to buy NEXT.
+        Suggest 5 to 10 items the user likely needs to buy NEXT.
 
-        **Reasoning Logic:**
-        1. **Depletion:** If they buy Milk every 7 days and last bought it 8 days ago, suggest it.
-        2. **Complementary:** If they recently bought 'Burger Patties', suggest 'Buns' even if not in history.
-        3. **Habit:** Identify weekly/monthly patterns.
-        4. **Seasonality:** Suggest items relevant to the current month if applicable.
+        **CRITICAL REASONING RULES (Follow Strictly):**
+        1. **Complementary Items (Most Important):** If the user bought 'Toothpaste', suggest 'Mouthwash' or 'Floss'. If they bought 'Laundry Powder', suggest 'Fabric Softener' or 'Bleach'. Look for these logical pairs in the history.
+        2. **Replenishment:** If an item was bought >7 days ago and is consumable (like Milk, Bread, Rice, Eggs), suggest it again.
+        3. **Force Suggestions:** Even if the history is short or sparse, use the 'category' or 'name' to guess what else they might need. DO NOT return an empty list.
+        4. **Variety:** Do not just suggest the exact same items unless they are overdue staples. Suggest related items from the same aisle.
+        5. **Context:** 'days_ago: 0' means bought today. 'days_ago: 30' means bought a month ago.
 
         **Output Format:**
         Return ONLY valid JSON containing a list of suggestions.
         {{
             "suggestions": [
                 {{
-                    "name": "Item Name",
-                    "category": "Category Name",
-                    "confidence": 0.95,
-                    "reason": "You usually buy this every 7 days",
-                    "estimatedPrice": 120.00
+                    "name": "Fabric Softener",
+                    "category": "Household",
+                    "confidence": 0.85,
+                    "reason": "Goes well with your recent detergent purchase",
+                    "estimatedPrice": 85.00
                 }}
             ]
         }}
         """
+
+    # =========================================================
+    # 3. HELPER METHODS
+    # =========================================================
 
     def _build_prompt(self, ocr_text: Optional[str], ocr_blocks: Optional[list]) -> str:
         """
@@ -183,17 +197,15 @@ To decide which number is the **UNIT PRICE**, you must perform a math check on e
 1. **Scenario A (3 Numbers):** You see `Qty`, `Num1`, and `Num2`.
    - Check: Does `Qty * Num1 ≈ Num2`?
    - If YES -> `Num1` is the Unit Price.
-   - *Example:* `2 @ 90.25 180.50`. Since `2 * 90.25 = 180.50`, then **90.25** is the price. Do NOT divide 90.25 again.
+   - *Example:* `2 @ 90.25 180.50`. Since `2 * 90.25 = 180.50`, then **90.25** is the price.
 
 2. **Scenario B (2 Numbers):** You only see `Qty` and `Num1`.
    - Check: Is `Num1` surprisingly large compared to similar items?
    - Assume `Num1` is the **Line Total**.
    - Calculate: `Unit Price = Num1 / Qty`.
-   - *Example:* `2 items ... 180.50`. Price is `90.25`.
 
 3. **Scenario C (Explicit Markers):** You see symbols like `@`, `P`, `ea`.
    - `@ 90.25` usually means 90.25 is the Unit Price.
-   - `P15.00ea` means 15.00 is the Unit Price.
 
 **Parsing Rules:**
 1. **Store Name:** Extract from the top.
@@ -214,24 +226,34 @@ To decide which number is the **UNIT PRICE**, you must perform a math check on e
 
     def _extract_json(self, response_text: str) -> Dict[str, Any]:
         """
-        Extract JSON from Gemini response, handling markdown code blocks
+        Extract JSON from Gemini response, robustly handling markdown code blocks
         """
         text = response_text.strip()
+
+        # Method 1: Try direct parse
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Method 2: Extract from ```json ... ``` markdown
         json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
         if json_match:
-            text = json_match.group(1)
+            try:
+                return json.loads(json_match.group(1))
+            except:
+                pass
 
+        # Method 3: Fallback - look for the first { and last }
         start = text.find('{')
         end = text.rfind('}')
+        if start != -1 and end != -1:
+            try:
+                return json.loads(text[start:end+1])
+            except:
+                pass
 
-        if start == -1 or end == -1:
-            return {}
-
-        try:
-            return json.loads(text[start:end+1])
-        except json.JSONDecodeError as e:
-            # Return empty dict on error instead of crashing
-            return {}
+        return {}
 
     def _validate_and_build_receipt(self, data: Dict[str, Any]) -> ParsedReceipt:
         items = []
