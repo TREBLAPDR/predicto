@@ -19,75 +19,46 @@ class SuggestionsScreen extends StatefulWidget {
   State<SuggestionsScreen> createState() => _SuggestionsScreenState();
 }
 
-class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTickerProviderStateMixin {
+class _SuggestionsScreenState extends State<SuggestionsScreen> {
   late SuggestionService _suggestionService;
-  List<ItemSuggestion> _standardSuggestions = [];
-  List<ItemSuggestion> _aiSuggestions = [];
-
-  bool _isLoadingStandard = true;
-  bool _isLoadingAI = false;
-  bool _aiLoaded = false;
-
+  List<ItemSuggestion> _suggestions = [];
+  bool _isLoading = true;
   int _addedCount = 0;
-  late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
     _loadData();
   }
 
   Future<void> _loadData() async {
+    // Initialize service and load AI suggestions immediately
     _suggestionService = await SuggestionService.getInstance();
-    _loadStandardSuggestions();
-  }
-
-  Future<void> _loadStandardSuggestions() async {
-    if (!mounted) return;
-    setState(() => _isLoadingStandard = true);
-
-    // Existing logic for standard suggestions
-    final results = await _suggestionService.generateSuggestions(
-        currentList: widget.currentItems,
-        maxSuggestions: 15
-    );
-
-    if (mounted) {
-      setState(() {
-        _standardSuggestions = results;
-        _isLoadingStandard = false;
-      });
-    }
+    _loadAISuggestions();
   }
 
   Future<void> _loadAISuggestions() async {
-    if (_aiLoaded && _aiSuggestions.isNotEmpty) return;
-
-    setState(() {
-      _isLoadingAI = true;
-    });
+    if (!mounted) return;
+    setState(() => _isLoading = true);
 
     try {
       final aiResults = await _suggestionService.getAISuggestions();
       if (mounted) {
         setState(() {
-          _aiSuggestions = aiResults;
-          _isLoadingAI = false;
-          _aiLoaded = true;
+          _suggestions = aiResults;
+          _isLoading = false;
         });
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _isLoadingAI = false);
-        ShadToaster.of(context).show(
-          ShadToast.destructive(title: const Text('AI Error'), description: Text(e.toString())),
-        );
+        setState(() => _isLoading = false);
+        // Log error but show empty state UI instead of crashing
+        print("AI Load Error: $e");
       }
     }
   }
 
-  Future<void> _addItem(ItemSuggestion suggestion, bool isAI) async {
+  Future<void> _addItem(ItemSuggestion suggestion) async {
     try {
       final listService = await ShoppingListService.getInstance();
 
@@ -97,17 +68,13 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTicker
         price: suggestion.estimatedPrice,
         qty: 1.0,
         category: suggestion.category,
-        notes: isAI ? "AI Suggested" : null,
+        notes: "AI Suggested",
       );
 
       await listService.addItem(widget.listId, newItem);
 
       setState(() {
-        if (isAI) {
-          _aiSuggestions.remove(suggestion);
-        } else {
-          _standardSuggestions.remove(suggestion);
-        }
+        _suggestions.remove(suggestion);
         _addedCount++;
       });
 
@@ -119,148 +86,127 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTicker
         ),
       );
     } catch (e) {
-      // Handle error
+      // Handle error silently or show toast
+      print("Error adding item: $e");
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF09090B), // Matches your app's Zinc background
+      backgroundColor: const Color(0xFF09090B),
       appBar: AppBar(
-        title: const Text('Suggestions', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(LucideIcons.sparkles, color: Colors.purple, size: 20),
+            SizedBox(width: 8),
+            Text(
+                'AI Insights',
+                style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)
+            ),
+          ],
+        ),
+        centerTitle: true,
         backgroundColor: const Color(0xFF09090B),
         iconTheme: const IconThemeData(color: Colors.white),
         leading: IconButton(
           icon: const Icon(LucideIcons.arrowLeft),
           onPressed: () => Navigator.pop(context, _addedCount),
         ),
-        bottom: TabBar(
-          controller: _tabController,
-          indicatorColor: Colors.blue,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.grey,
-          dividerColor: Colors.white10,
-          tabs: const [
-            Tab(text: "Standard"),
-            Tab(text: "AI Insights ✨"),
-          ],
-          onTap: (index) {
-            if (index == 1 && !_aiLoaded) {
-              _loadAISuggestions();
-            }
-          },
-        ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          // Standard Tab
-          _buildSuggestionList(_standardSuggestions, _isLoadingStandard, false),
-
-          // AI Tab
-          _buildAITab(),
+        actions: [
+          IconButton(
+            icon: const Icon(LucideIcons.refreshCw, size: 20),
+            onPressed: _loadAISuggestions,
+            tooltip: 'Refresh Predictions',
+          )
         ],
       ),
+      body: _buildContent(),
     );
   }
 
-  Widget _buildAITab() {
-    if (_isLoadingAI) {
+  Widget _buildContent() {
+    // 1. Loading State
+    if (_isLoading) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const CircularProgressIndicator(color: Colors.purple),
-            const SizedBox(height: 16),
+            const SizedBox(height: 24),
             Text(
               "Consulting Gemini AI...",
-              style: TextStyle(color: Colors.purple.shade200, fontSize: 16),
+              style: TextStyle(color: Colors.purple.shade200, fontSize: 18, fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 8),
             const Text(
-              "Analyzing purchase history patterns",
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+              "Analyzing your purchase patterns",
+              style: TextStyle(color: Colors.grey, fontSize: 14),
             ),
           ],
         ),
       );
     }
 
-    if (!_aiLoaded && _aiSuggestions.isEmpty) {
+    // 2. Empty State
+    if (_suggestions.isEmpty) {
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(LucideIcons.sparkles, size: 64, color: Colors.grey),
-            const SizedBox(height: 16),
-            const Text("Unlock AI Insights", style: TextStyle(color: Colors.white, fontSize: 18)),
-            const SizedBox(height: 8),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 40),
-              child: Text(
-                "Gemini can analyze your habits and seasonality to predict what you need next.",
+        child: Padding(
+          padding: const EdgeInsets.all(32.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: Colors.purple.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(LucideIcons.brainCircuit, size: 48, color: Colors.purple),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                "No Insights Yet",
+                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                "Gemini needs more purchase history to make predictions. Try scanning more receipts or checking off items!",
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey),
+                style: TextStyle(color: Colors.grey, height: 1.5),
               ),
-            ),
-            const SizedBox(height: 24),
-            ShadButton(
-              onPressed: _loadAISuggestions,
-              backgroundColor: Colors.purple,
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(LucideIcons.brainCircuit, size: 18),
-                  SizedBox(width: 8),
-                  Text("Generate Suggestions"),
-                ],
-              ),
-            )
-          ],
+              const SizedBox(height: 32),
+              ShadButton.outline(
+                onPressed: _loadAISuggestions,
+                child: const Text("Try Again"),
+              )
+            ],
+          ),
         ),
       );
     }
 
-    return _buildSuggestionList(_aiSuggestions, false, true);
-  }
-
-  Widget _buildSuggestionList(List<ItemSuggestion> items, bool isLoading, bool isAI) {
-    if (isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (items.isEmpty) {
-      return const Center(
-        child: Text("No suggestions found", style: TextStyle(color: Colors.grey)),
-      );
-    }
-
+    // 3. List of Suggestions
     return ListView.separated(
       padding: const EdgeInsets.all(16),
-      itemCount: items.length,
+      itemCount: _suggestions.length,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
-        final item = items[index];
+        final item = _suggestions[index];
         return ShadCard(
           padding: const EdgeInsets.all(16),
-          backgroundColor: const Color(0xFF18181B), // Zinc 900 for cards
-          border: isAI
-              ? ShadBorder.all(color: Colors.purple.withOpacity(0.5), width: 1)
-              : ShadBorder.all(color: Colors.white.withOpacity(0.1)),
+          backgroundColor: const Color(0xFF18181B),
+          border: ShadBorder.all(color: Colors.purple.withOpacity(0.4), width: 1),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(10),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: isAI ? Colors.purple.withOpacity(0.1) : Colors.blue.withOpacity(0.1),
-                  shape: BoxShape.circle,
+                  color: Colors.purple.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                    isAI ? LucideIcons.sparkles : LucideIcons.history,
-                    color: isAI ? Colors.purple : Colors.blue,
-                    size: 20
-                ),
+                child: const Icon(LucideIcons.lightbulb, color: Colors.purple, size: 24),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -275,21 +221,37 @@ class _SuggestionsScreenState extends State<SuggestionsScreen> with SingleTicker
                         color: Colors.white,
                       ),
                     ),
-                    if (isAI && item.confidence > 0)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          "Confidence: ${(item.confidence * 100).toStringAsFixed(0)}%",
-                          style: TextStyle(color: Colors.purple.shade200, fontSize: 12),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.white10,
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            item.category,
+                            style: TextStyle(color: Colors.grey.shade300, fontSize: 10),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 8),
+                        if (item.confidence > 0)
+                          Text(
+                            "${(item.confidence * 100).toInt()}% Match",
+                            style: TextStyle(color: Colors.purple.shade200, fontSize: 11, fontWeight: FontWeight.bold),
+                          ),
+                      ],
+                    ),
                   ],
                 ),
               ),
-              ShadButton.outline(
+              ShadButton(
                 size: ShadButtonSize.sm,
-                onPressed: () => _addItem(item, isAI),
-                child: const Icon(LucideIcons.plus, size: 16),
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+                onPressed: () => _addItem(item),
+                child: const Icon(LucideIcons.plus, size: 18),
               ),
             ],
           ),
