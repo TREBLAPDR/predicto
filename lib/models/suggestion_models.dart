@@ -6,7 +6,7 @@ class ItemSuggestion {
   final String category;
   final double? estimatedPrice;
   final double confidence;
-  final SuggestionReason reason;
+  final String reason; // Changed to String to handle custom AI reasons easily
   final List<String> relatedItems;
 
   ItemSuggestion({
@@ -18,64 +18,15 @@ class ItemSuggestion {
     this.relatedItems = const [],
   });
 
-  Map<String, dynamic> toJson() => {
-    'itemName': itemName,
-    'category': category,
-    'estimatedPrice': estimatedPrice,
-    'confidence': confidence,
-    'reason': reason.toString(),
-    'relatedItems': relatedItems,
-  };
-}
-
-enum SuggestionReason {
-  frequentlyPurchased,
-  usuallyBuyTogether,
-  similarToRecent,
-  recipeCompletion,
-  seasonalTrend,
-  runningLow,
-  daySpecific,
-}
-
-extension SuggestionReasonExtension on SuggestionReason {
-  String get displayText {
-    switch (this) {
-      case SuggestionReason.frequentlyPurchased:
-        return 'Frequent Purchase';
-      case SuggestionReason.usuallyBuyTogether:
-        return 'Often Bought Together';
-      case SuggestionReason.similarToRecent:
-        return 'Similar to Recent';
-      case SuggestionReason.recipeCompletion:
-        return 'Recipe Completion';
-      case SuggestionReason.seasonalTrend:
-        return 'Seasonal Trend';
-      case SuggestionReason.runningLow:
-        return 'Running Low';
-      case SuggestionReason.daySpecific:
-        return 'Day Specific Routine';
-    }
-  }
-
-  // CHANGED: Returns IconData instead of String (Emoji)
-  IconData get icon {
-    switch (this) {
-      case SuggestionReason.frequentlyPurchased:
-        return LucideIcons.history; // Professional history icon
-      case SuggestionReason.usuallyBuyTogether:
-        return LucideIcons.link; // Link implies connection/together
-      case SuggestionReason.similarToRecent:
-        return LucideIcons.layers; // Layers imply similarity/stacking
-      case SuggestionReason.recipeCompletion:
-        return LucideIcons.utensils; // Utensils for cooking/recipes
-      case SuggestionReason.seasonalTrend:
-        return LucideIcons.calendar; // Calendar for seasons
-      case SuggestionReason.runningLow:
-        return LucideIcons.hourglass; // Hourglass implies time running out
-      case SuggestionReason.daySpecific:
-        return LucideIcons.calendarClock; // Calendar + Clock for specific days
-    }
+  factory ItemSuggestion.fromJson(Map<String, dynamic> json) {
+    return ItemSuggestion(
+      itemName: json['name'] ?? 'Unknown',
+      category: json['category'] ?? 'General',
+      estimatedPrice: json['estimatedPrice']?.toDouble(),
+      confidence: json['confidence']?.toDouble() ?? 0.0,
+      reason: json['reason'] ?? 'Suggested by AI',
+      relatedItems: List<String>.from(json['relatedItems'] ?? []),
+    );
   }
 }
 
@@ -91,8 +42,6 @@ class PurchaseHistory {
     required this.category,
     this.price,
   });
-
-  int get dayOfWeek => purchaseDate.weekday;
 
   Map<String, dynamic> toJson() => {
     'itemName': itemName,
