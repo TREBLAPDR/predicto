@@ -105,7 +105,7 @@ class GeminiService:
                     prompt,
                     generation_config=genai.types.GenerationConfig(
                         temperature=0.7,  # INCREASED for more creativity
-                        max_output_tokens=2000,
+                        max_output_tokens=4000,  # INCREASED from 2000
                         # REMOVED: response_mime_type="application/json"
                     )
                 )
@@ -113,6 +113,13 @@ class GeminiService:
 
             print(f"📥 [DEBUG] Raw response length: {len(response.text)}")
             print(f"📥 [DEBUG] First 500 chars: {response.text[:500]}")
+
+            # Check if response looks truncated
+            if len(response.text) > 0 and not response.text.rstrip().endswith('}'):
+                print("⚠️ [DEBUG] Response appears truncated, missing closing brace")
+
+            # FULL response for debugging
+            print(f"📥 [DEBUG] FULL RESPONSE:\n{response.text}")
 
             # Extract and parse JSON
             result = self._extract_json(response.text)
@@ -284,37 +291,72 @@ To decide which number is the **UNIT PRICE**, you must perform a math check on e
         """
         text = response_text.strip()
 
-        # Strategy 1: Direct JSON parse
+        # Strategy 1: Remove markdown code fences first
+        if text.startswith('```'):
+            # Remove opening ```json or ```
+            text = re.sub(r'^```(?:json)?\s*', '', text)
+            # Remove closing ```
+            text = re.sub(r'\s*```
+
+    def _validate_and_build_receipt(self, data: Dict[str, Any]) -> ParsedReceipt:
+        items = []
+        for item_data in data.get('items', []):
+            try:
+                items.append(ReceiptItem(
+                    name=str(item_data.get('name', 'Unknown')),
+                    price=float(item_data['price']) if item_data.get('price') is not None else None,
+                    qty=float(item_data.get('qty', 1.0)),
+                    confidence=float(item_data.get('confidence', 0.8))
+                ))
+            except (KeyError, ValueError, TypeError):
+                continue
+
+        return ParsedReceipt(
+            storeName=data.get('storeName'),
+            date=data.get('date'),
+            items=items,
+            subtotal=float(data['subtotal']) if data.get('subtotal') is not None else None,
+            tax=float(data['tax']) if data.get('tax') is not None else None,
+            total=float(data['total']) if data.get('total') is not None else None,
+            parsingConfidence=float(data.get('parsingConfidence', 0.7))
+        ), '', text)
+            text = text.strip()
+
+        # Strategy 2: Direct JSON parse (after cleaning)
         try:
             return json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            print(f"⚠️ [DEBUG] JSON parse error: {str(e)}")
             pass
 
-        # Strategy 2: Extract from markdown code blocks
+        # Strategy 3: Extract from markdown code blocks (if still present)
         patterns = [
             r'```json\s*(\{.*?\})\s*```',  # ```json {...} ```
             r'```\s*(\{.*?\})\s*```',       # ``` {...} ```
-            r'(\{.*\})',                     # Any {...}
         ]
 
         for pattern in patterns:
-            match = re.search(pattern, text, re.DOTALL)
+            match = re.search(pattern, response_text, re.DOTALL)
             if match:
                 try:
                     return json.loads(match.group(1))
-                except:
+                except Exception as e:
+                    print(f"⚠️ [DEBUG] Pattern extraction failed: {str(e)}")
                     continue
 
-        # Strategy 3: Find first { to last }
-        start = text.find('{')
-        end = text.rfind('}')
+        # Strategy 4: Find first { to last } in original text
+        start = response_text.find('{')
+        end = response_text.rfind('}')
         if start != -1 and end != -1 and end > start:
             try:
-                return json.loads(text[start:end+1])
-            except:
+                json_str = response_text[start:end+1]
+                return json.loads(json_str)
+            except Exception as e:
+                print(f"⚠️ [DEBUG] Brace extraction failed: {str(e)}")
                 pass
 
-        print(f"⚠️ [DEBUG] Could not extract JSON from: {text[:200]}")
+        print(f"⚠️ [DEBUG] All extraction strategies failed")
+        print(f"⚠️ [DEBUG] Response preview: {response_text[:300]}")
         return {}
 
     def _validate_and_build_receipt(self, data: Dict[str, Any]) -> ParsedReceipt:
