@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ==================== RECEIPT & PARSING SCHEMAS ====================
 
@@ -12,7 +12,7 @@ class ReceiptItem(BaseModel):
 
 class ParsedReceipt(BaseModel):
     storeName: Optional[str] = None
-    date: Optional[str] = None  # Format: YYYY-MM-DD
+    date: Optional[str] = None
     items: List[ReceiptItem] = []
     subtotal: Optional[float] = None
     tax: Optional[float] = None
@@ -25,37 +25,36 @@ class OCRTextBlock(BaseModel):
     confidence: float
 
 class ProcessReceiptRequest(BaseModel):
-    """Request format for advanced receipt processing"""
-    imageBase64: Optional[str] = None  # Base64 encoded image
-    ocrText: Optional[str] = None  # Raw OCR text
-    ocrBlocks: Optional[List[OCRTextBlock]] = None  # OCR blocks with positions
-    useGemini: bool = True  # Whether to use Gemini or basic parsing
+    imageBase64: Optional[str] = None
+    ocrText: Optional[str] = None
+    ocrBlocks: Optional[List[OCRTextBlock]] = None
+    useGemini: bool = True
 
 class ProcessReceiptResponse(BaseModel):
     success: bool
     receipt: Optional[ParsedReceipt] = None
     error: Optional[str] = None
-    processingTimeMs: int
-    method: str  # "gemini" or "basic"
+    processingTimeMs: int = 0
+    method: str = "unknown"
 
-# ==================== SHARING SCHEMAS ====================
+# ==================== SHARE SCHEMAS ====================
 
 class CreateShareRequest(BaseModel):
     listId: str
     listName: str
     items: List[dict]
-    permission: str = "edit"  # view, edit, admin
+    permission: str = "view"
     daysValid: int = 7
 
 class ShareInfo(BaseModel):
     shareId: str
     listId: str
     listName: str
-    ownerName: str = "Someone"
-    createdAt: str
-    expiresAt: str
-    itemCount: int
+    ownerName: str
+    createdAt: datetime
+    expiresAt: datetime
     permission: str
+    url: str
 
 class ShareLinkResponse(BaseModel):
     success: bool
@@ -101,6 +100,7 @@ class ProductSearchResponse(BaseModel):
 
 class PurchaseRecordRequest(BaseModel):
     product_id: str
+    name: Optional[str] = None  # <--- ADDED THIS FIELD
     purchase_date: Optional[datetime] = None
     price: Optional[float] = None
     quantity: float = 1.0
