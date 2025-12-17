@@ -37,24 +37,24 @@ class ProcessReceiptResponse(BaseModel):
     processingTimeMs: int = 0
     method: str = "unknown"
 
-# ==================== SHARE SCHEMAS ====================
+# ==================== SHARE SCHEMAS (FIXED) ====================
 
 class CreateShareRequest(BaseModel):
     listId: str
     listName: str
     items: List[dict]
-    permission: str = "view"
+    permission: str = "edit"  # "view", "edit", or "admin"
     daysValid: int = 7
 
 class ShareInfo(BaseModel):
     shareId: str
     listId: str
     listName: str
-    ownerName: str
-    createdAt: datetime
-    expiresAt: datetime
+    ownerName: str  # REQUIRED by frontend
+    createdAt: str  # ISO format string
+    expiresAt: str  # ISO format string
+    itemCount: int  # REQUIRED by frontend
     permission: str
-    url: str
 
 class ShareLinkResponse(BaseModel):
     success: bool
@@ -100,7 +100,7 @@ class ProductSearchResponse(BaseModel):
 
 class PurchaseRecordRequest(BaseModel):
     product_id: str
-    name: Optional[str] = None  # <--- ADDED THIS FIELD
+    name: Optional[str] = None
     purchase_date: Optional[datetime] = None
     price: Optional[float] = None
     quantity: float = 1.0

@@ -30,9 +30,18 @@ class SharingService {
     int daysValid = 7,
   }) async {
     final baseUrl = _settings.backendUrl;
+
+    if (baseUrl.isEmpty) {
+      throw Exception('Backend URL not configured. Please set it in Settings.');
+    }
+
     final endpoint = Uri.parse('$baseUrl/api/share/create');
 
     try {
+      print('🔗 Creating share link...');
+      print('📍 URL: $endpoint');
+      print('📦 List: ${list.name} (${list.items.length} items)');
+
       final response = await http.post(
         endpoint,
         headers: {'Content-Type': 'application/json'},
@@ -45,25 +54,53 @@ class SharingService {
         }),
       ).timeout(const Duration(seconds: 10));
 
+      print('📥 Response status: ${response.statusCode}');
+      print('📥 Response body: ${response.body}');
+
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+
+        // Check if backend returned success
+        if (data['success'] != true) {
+          throw Exception(data['error'] ?? 'Unknown error from backend');
+        }
+
+        // Check if shareInfo exists
+        if (data['shareInfo'] == null) {
+          throw Exception('Backend did not return share information');
+        }
+
         return SharedListInfo.fromJson(data['shareInfo']);
       } else {
-        throw Exception('Failed to create share link: ${response.body}');
+        throw Exception('Server error: ${response.statusCode} - ${response.body}');
       }
+    } on http.ClientException catch (e) {
+      throw Exception('Network connection failed: ${e.message}');
+    } on FormatException catch (e) {
+      throw Exception('Invalid response format: ${e.message}');
     } catch (e) {
-      throw Exception('Network error: $e');
+      print('❌ Share creation error: $e');
+      rethrow;
     }
   }
 
   /// Access a shared list via share ID
   Future<ShoppingList> accessSharedList(String shareId) async {
     final baseUrl = _settings.backendUrl;
+
+    if (baseUrl.isEmpty) {
+      throw Exception('Backend URL not configured');
+    }
+
     final endpoint = Uri.parse('$baseUrl/api/share/$shareId');
 
     try {
+      print('🔍 Accessing shared list: $shareId');
+
       final response = await http.get(endpoint)
           .timeout(const Duration(seconds: 10));
+
+      print('📥 Response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -72,7 +109,10 @@ class SharingService {
           throw Exception('This share link has expired');
         }
 
-        final sharedInfo = SharedListInfo.fromJson(data['shareInfo']);
+        if (data['shareInfo'] == null || data['list'] == null) {
+          throw Exception('Invalid response from server');
+        }
+
         final listData = data['list'];
 
         // Convert to ShoppingList
@@ -87,20 +127,20 @@ class SharingService {
           storeName: listData['storeName'],
         );
       } else if (response.statusCode == 404) {
-        throw Exception('Share link not found');
+        throw Exception('Share link not found or expired');
       } else {
-        throw Exception('Failed to access shared list: ${response.body}');
+        throw Exception('Server error: ${response.statusCode}');
       }
     } catch (e) {
-      throw Exception('Network error: $e');
+      print('❌ Access error: $e');
+      rethrow;
     }
   }
 
   /// Get share URL for displaying to user
   String getShareUrl(String shareId) {
-    // For a web app, this would be your app's URL
-    // For mobile, use a deep link or just the share code
-    return 'shopping-list://share/$shareId';
+    // Use your GitHub Pages URL
+    return 'https://TREBLAPDR.github.io/link/?id=$shareId';
   }
 
   /// Save accessed shared lists locally
@@ -126,21 +166,35 @@ class SharingService {
     final String? listsJson = _prefs.getString(_keySharedLists);
     if (listsJson == null) return [];
 
-    final List<dynamic> listData = jsonDecode(listsJson);
-    return listData
-        .map((json) => SharedListInfo.fromJson(json))
-        .where((s) => !s.isExpired) // Filter out expired
-        .toList();
+    try {
+      final List<dynamic> listData = jsonDecode(listsJson);
+      return listData
+          .map((json) => SharedListInfo.fromJson(json))
+          .where((s) => !s.isExpired) // Filter out expired
+          .toList();
+    } catch (e) {
+      print('⚠️ Error loading accessed lists: $e');
+      return [];
+    }
   }
 
   Future<void> _saveAccessedLists(List<SharedListInfo> lists) async {
-    final String listsJson = jsonEncode(lists.map((l) => l.toJson()).toList());
-    await _prefs.setString(_keySharedLists, listsJson);
+    try {
+      final String listsJson = jsonEncode(lists.map((l) => l.toJson()).toList());
+      await _prefs.setString(_keySharedLists, listsJson);
+    } catch (e) {
+      print('⚠️ Error saving accessed lists: $e');
+    }
   }
 
   /// Delete a share link (owner only)
   Future<void> deleteShareLink(String shareId) async {
     final baseUrl = _settings.backendUrl;
+
+    if (baseUrl.isEmpty) {
+      throw Exception('Backend URL not configured');
+    }
+
     final endpoint = Uri.parse('$baseUrl/api/share/$shareId');
 
     try {
@@ -151,7 +205,8 @@ class SharingService {
         throw Exception('Failed to delete share link');
       }
     } catch (e) {
-      throw Exception('Network error: $e');
+      print('❌ Delete error: $e');
+      rethrow;
     }
   }
 }

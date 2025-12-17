@@ -27,7 +27,7 @@ async def process_receipt_advanced(request: ProcessReceiptRequest):
     Advanced receipt processing endpoint
     Accepts: preprocessed image (base64) and/or OCR text + blocks
     Returns: Structured receipt data (JSON)
-        PRIVACY NOTE: When useGemini=true, image data is sent to Google's Gemini API.
+    PRIVACY NOTE: When useGemini=true, image data is sent to Google's Gemini API.
     This may include store names, item details, and receipt content.
     """
     start_time = time.time()
@@ -191,20 +191,31 @@ async def create_share_link(request: CreateShareRequest):
             "expiresAt": expires_at.isoformat(),
         }
 
-        share_info = ShareInfo(
-            shareId=share_id,
-            listId=request.listId,
-            listName=request.listName,
-            createdAt=created_at.isoformat(),
-            expiresAt=expires_at.isoformat(),
-            itemCount=len(request.items),
-            permission=request.permission,
-        )
+        # FIXED: Return proper ShareInfo structure matching the frontend model
+        share_info = {
+            "shareId": share_id,
+            "listId": request.listId,
+            "listName": request.listName,
+            "ownerName": "You",  # ADDED: Required by frontend
+            "createdAt": created_at.isoformat(),
+            "expiresAt": expires_at.isoformat(),
+            "itemCount": len(request.items),  # ADDED: Required by frontend
+            "permission": request.permission,
+        }
 
-        return ShareLinkResponse(success=True, shareInfo=share_info)
+        return {
+            "success": True,
+            "shareInfo": share_info,
+            "error": None
+        }
 
     except Exception as e:
-        return ShareLinkResponse(success=False, error=str(e))
+        print(f"❌ Share creation error: {str(e)}")
+        return {
+            "success": False,
+            "shareInfo": None,
+            "error": str(e)
+        }
 
 @router.get("/share/{share_id}", response_model=AccessSharedListResponse)
 async def access_shared_list(share_id: str):
@@ -222,21 +233,25 @@ async def access_shared_list(share_id: str):
         is_expired = datetime.now() > expires_at
 
         if is_expired:
-            return AccessSharedListResponse(
-                success=False,
-                expired=True,
-                error="This share link has expired"
-            )
+            return {
+                "success": False,
+                "expired": True,
+                "shareInfo": None,
+                "list": None,
+                "error": "This share link has expired"
+            }
 
-        share_info = ShareInfo(
-            shareId=share_id,
-            listId=shared_data["listId"],
-            listName=shared_data["listName"],
-            createdAt=shared_data["createdAt"],
-            expiresAt=shared_data["expiresAt"],
-            itemCount=len(shared_data["items"]),
-            permission=shared_data["permission"],
-        )
+        # FIXED: Return proper structure with all required fields
+        share_info = {
+            "shareId": share_id,
+            "listId": shared_data["listId"],
+            "listName": shared_data["listName"],
+            "ownerName": "Someone",  # ADDED: Required by frontend
+            "createdAt": shared_data["createdAt"],
+            "expiresAt": shared_data["expiresAt"],
+            "itemCount": len(shared_data["items"]),  # ADDED: Required by frontend
+            "permission": shared_data["permission"],
+        }
 
         list_data = {
             "listName": shared_data["listName"],
@@ -245,17 +260,25 @@ async def access_shared_list(share_id: str):
             "storeName": None,
         }
 
-        return AccessSharedListResponse(
-            success=True,
-            expired=False,
-            shareInfo=share_info,
-            list=list_data,
-        )
+        return {
+            "success": True,
+            "expired": False,
+            "shareInfo": share_info,
+            "list": list_data,
+            "error": None
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        return AccessSharedListResponse(success=False, error=str(e))
+        print(f"❌ Access shared list error: {str(e)}")
+        return {
+            "success": False,
+            "expired": False,
+            "shareInfo": None,
+            "list": None,
+            "error": str(e)
+        }
 
 @router.delete("/share/{share_id}")
 async def delete_share_link(share_id: str):
